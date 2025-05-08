@@ -46,6 +46,7 @@
         "cctype": "cpp",
         "clocale": "cpp",
         "execution": "cpp",
-        "optional": "cpp"
+        "optional": "cpp",
+        "__tree": "cpp"
     }
 }

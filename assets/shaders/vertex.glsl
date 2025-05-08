@@ -8,6 +8,9 @@ uniform vec2 u_Pos;
 uniform float u_Width;
 uniform float u_Height;
 
+uniform float u_AspectRatio;
+
 void main() {
     gl_Position=vec4(u_Pos + vec2(u_Width, u_Height) * aPos.xy, 0.0f,1.0f);
+    gl_Position.x= gl_Position.x/  u_AspectRatio;
 }
