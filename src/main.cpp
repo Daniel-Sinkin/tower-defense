@@ -108,6 +108,7 @@ struct Constants {
     static constexpr const char *fp_shader_dir = "assets/shaders/";
     static constexpr const char *fp_vertex_shader = "assets/shaders/vertex.glsl";
     static constexpr const char *fp_fragment_shader = "assets/shaders/fragment.glsl";
+    static constexpr const char *fp_fragment_tower_range_shader = "assets/shaders/fragment_tower_range.glsl";
 };
 
 auto window_normalized_to_ndc(const Position &norm_pos) -> Position {
@@ -249,6 +250,7 @@ struct Global {
     SDL_GLContext gl_context;
 
     gl_ShaderProgram shader_program;
+    gl_ShaderProgram shader_program_tower_range;
     gl_VAO vao_square;
     gl_VAO vao_circle;
     gl_VAO vao_triangle;
@@ -598,6 +600,30 @@ auto compile_shader_from_file(const char *filepath, GLenum shader_type) -> gl_Sh
         handle_gl_error("Shader Compilation Failed.");
     }
     return shader;
+}
+
+auto compile_tower_range_shader() -> void {
+    gl_Shader vertex_shader = compile_shader_from_file(Constants::fp_vertex_shader, GL_VERTEX_SHADER);
+    if (vertex_shader == 0) panic("Failed to compile vertex shader.");
+    gl_Shader fragment_shader = compile_shader_from_file(Constants::fp_fragment_tower_range_shader, GL_FRAGMENT_SHADER);
+    if (fragment_shader == 0) panic("Failed to compile fragment shader.");
+
+    global.shader_program_tower_range = glCreateProgram();
+
+    glAttachShader(global.shader_program_tower_range, vertex_shader);
+    glAttachShader(global.shader_program_tower_range, fragment_shader);
+
+    glLinkProgram(global.shader_program_tower_range);
+    // Check link errors:
+    glGetProgramiv(global.shader_program_tower_range, GL_LINK_STATUS, &global.gl_success);
+    if (!global.gl_success) {
+        glGetProgramInfoLog(global.shader_program_tower_range, 512, nullptr, global.gl_error_buffer);
+        panic(std::string("Shader Program Link Failed: ") + global.gl_error_buffer);
+    }
+
+    glUseProgram(global.shader_program_tower_range);
+    glDeleteShader(vertex_shader);
+    glDeleteShader(fragment_shader);
 }
 
 auto compile_shader_program() -> void {
