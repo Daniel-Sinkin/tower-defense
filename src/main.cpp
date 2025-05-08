@@ -40,26 +40,8 @@ struct Constants {
     static constexpr int window_height = 720;
     static constexpr float aspect_ratio = static_cast<float>(window_width) / window_height;
 
-    static constexpr int n_block_rows = 12;
-    static constexpr int n_block_cols = 35;
-    static constexpr float block_region_height = 0.4f;
-    static constexpr float block_region_width = 0.9f;
-
-    static constexpr float block_height = block_region_height / n_block_rows * 0.8f;
-    static constexpr float block_width = block_region_width / n_block_cols * 0.9f;
-
-    static constexpr float paddle_width = 0.15f;
-    static constexpr float paddle_height = 0.15f;
-    static constexpr float paddle_collision_deadzone = 0.001f;
-
-    static constexpr float ball_width = 0.05f / aspect_ratio;
-    static constexpr float ball_height = 0.05f;
-
-    static constexpr int standard_value = 10;
-    static constexpr Color standard_color = Color{0.8f, 0.2f, 0.1f};
-
-    static constexpr int special_value = 25;
-    static constexpr Color special_color = Color{0.9f, 0.9f, 0.1f};
+    static constexpr float path_marker_width = 0.05f / aspect_ratio;
+    static constexpr float path_marker_height = 0.05f;
 
     static constexpr std::array<float, 12> square_vertices = {
         1.0f, -1.0f, 0.0f,
@@ -84,11 +66,24 @@ struct Constants {
     static constexpr const char *fp_fragment_shader = "assets/shaders/fragment.glsl";
 };
 
+auto window_normalized_to_ndc(const Position &norm_pos) -> Position {
+    return Position{
+        norm_pos.x * 2.0f - 1.0f,
+        1.0f - norm_pos.y * 2.0f};
+}
+
+auto ndc_to_window_normalized(const Position &ndc_pos) -> Position {
+    return Position{
+        (ndc_pos.x + 1.0f) * 0.5f,
+        (1.0f - ndc_pos.y) * 0.5f};
+}
+
 struct Box {
     Position position;
     float width;
     float height;
 };
+
 enum class CollisionDirection {
     None,
     Left,
@@ -151,11 +146,22 @@ struct Block {
     bool active;
     bool special;
 };
+struct Enemy {
+    bool is_active;
+    int hp;
+    int hp_max;
+    Box box;
+    int pathfinding_target = -1;
+
+    auto death() -> void {
+        this->is_active = false;
+    }
+    auto take_damage(int amount) -> void {
+        this->hp -= amount;
+    }
+};
 struct GameState {
     int score = 0;
-    int lives = 3;
-
-    std::array<std::array<Block, Constants::n_block_cols>, Constants::n_block_rows> blocks;
 };
 
 struct s_UBO {
@@ -166,9 +172,9 @@ struct s_UBO {
     gl_UBO color;
 };
 struct s_Color {
-    Color background{1.0f, 0.5f, 0.31f};
-    Color ball{1.0f, 1.0f, 1.0f};
-    Color paddle{1.0f, 0.0f, 0.0f};
+    Color background{0.2f, 0.7f, 0.31f};
+    Color path_marker{1.0f, 0.0f, 1.0f};
+    Color enemy{1.0f, 0.0f, 0.0f};
 };
 
 struct Global {
@@ -179,18 +185,12 @@ struct Global {
     SDL_GLContext gl_context;
 
     gl_ShaderProgram shader_program;
-    gl_VAO paddle_vao;
+    gl_VAO vao_square;
     s_UBO ubo;
 
     s_Color color;
 
-    float paddle_pos = 0.5f;
-    float paddle_speed = 0.045f;
-
-    Box paddle{Position{0.0f, -0.8f}, Constants::paddle_width, Constants::paddle_height};
-    Box ball{Position{0.0f, -0.6f}, Constants::ball_width, Constants::ball_height};
-    glm::vec2 ball_direction = glm::normalize(glm::vec2{1.0f, -1.0f});
-    float ball_speed = 0.025f;
+    Position mouse_pos;
 
     int frame_counter = 0;
     std::chrono::system_clock::time_point run_start_time;
@@ -198,12 +198,51 @@ struct Global {
     std::chrono::milliseconds delta_time;
     std::chrono::milliseconds runtime;
 
+    std::array<Box, 15> path_markers = {
+        Box{window_normalized_to_ndc(Position{0.131250, 0.931944}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.133594, 0.729167}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.173438, 0.573611}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.243750, 0.436111}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.350781, 0.204167}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.411719, 0.163889}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.441406, 0.227778}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.477344, 0.355556}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.524219, 0.583333}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.596094, 0.820833}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.667969, 0.786111}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.710156, 0.558333}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.716406, 0.368056}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.774219, 0.226389}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.939844, 0.166667}), Constants::path_marker_width, Constants::path_marker_height}};
+
+    std::vector<Enemy> enemies = {
+        Enemy{true, 100, 100, Box{Position{0.0f, 0.0f}, 0.05f / Constants::aspect_ratio, 0.05f}},
+        Enemy{true, 100, 500, Box{Position{0.2f, 0.0f}, 0.05f / Constants::aspect_ratio, 0.05f}},
+        Enemy{true, 300, 300, Box{Position{-0.2f, 0.0f}, 0.05f / Constants::aspect_ratio, 0.05f}}};
+
     int gl_success;
     char gl_error_buffer[512];
 
     GameState game;
 };
 Global global;
+auto on_tick(Enemy *enemy) -> void {
+    if (!enemy->is_active) return;
+    auto &target = global.path_markers[enemy->pathfinding_target];
+    float dist_to_target = glm::distance(target.position, enemy->box.position);
+    if (dist_to_target < 0.01f) {
+        enemy->pathfinding_target = (enemy->pathfinding_target + 1 % global.path_markers.size());
+    }
+
+    glm::vec2 dir = normalize(target.position - enemy->box.position);
+
+    // TODO: Might need to normalize for aspect ratio
+    enemy->box.position += dir * 0.001f;
+
+    if (enemy->is_active) {
+        if (enemy->hp <= 0) enemy->death();
+    }
+}
 
 auto handle_gl_error(const char *reason) -> void {
     std::cerr << reason << "\n"
@@ -244,124 +283,35 @@ auto format_duration(std::chrono::milliseconds duration) -> const char * {
     return buffer;
 }
 
-auto reset_board() -> void {
-    for (size_t row = 0; row < Constants::n_block_rows; ++row) {
-        for (size_t col = 0; col < Constants::n_block_cols; ++col) {
-            bool is_special = row == col;
-            int value;
-            Color color;
-            if (is_special) {
-                value = Constants::special_value;
-                color = Constants::special_color;
-            } else {
-                value = Constants::standard_value;
-                color = Constants::standard_color;
-            }
-            auto position = Position{static_cast<float>(col) / Constants::n_block_cols, static_cast<float>(row) / Constants::n_block_rows};
-            position *= 2.0f * glm::vec2{1.0f, -1.0f};
-            position *= glm::vec2{Constants::block_region_width, Constants::block_region_height};
-            position -= glm::vec2{0.9f, -0.9f};
-            Block block = {
-                .active = true,
-                .special = is_special,
-                .box = Box{position, Constants::block_width, Constants::block_height},
-                .value = value,
-                .color = color};
-            global.game.blocks[row][col] = block;
-        };
-    }
-}
-
-auto destroy_block(size_t row_idx, size_t col_idx) -> void {
-    Block &block = global.game.blocks[row_idx][col_idx];
-    if (!block.active) throw std::runtime_error("Trying to destroy inactive block!");
-    block.active = false;
-    global.game.score += block.value;
-}
-
 auto _main_imgui() -> void {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame(global.window);
     ImGui::NewFrame();
     { // Debug
         ImGui::Begin("Debug");
-
         ImGui::ColorEdit3("Background", glm::value_ptr(global.color.background));
-        ImGui::ColorEdit3("Paddle", glm::value_ptr(global.color.paddle));
-        ImGui::ColorEdit3("Ball", glm::value_ptr(global.color.ball));
-
-        ImGui::SliderFloat("Ball Speed", &global.ball_speed, 0.0f, 0.2f);
-
         ImGui::Text("Frame Counter: %d", global.frame_counter);
         ImGui::Text("Run Start: %s", format_time(global.run_start_time));
         ImGui::Text("Runtime: %s", format_duration(global.runtime));
         ImGui::Text("Runtime Count: %lld", global.runtime.count());
         ImGui::Text("Delta Time (ms): %lld", global.delta_time.count());
-        ImGui::Text("Paddle position: %f", global.paddle.position.x);
-
+        ImGui::Text("Score: %d", global.game.score);
+        ImGui::Text("Mouse Position: (%.3f, %.3f)", global.mouse_pos.x, global.mouse_pos.y);
+        for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
+            ImGui::Text("Enemy %zu target: %d", enemy_idx, global.enemies[enemy_idx].pathfinding_target);
+        }
         ImGui::End();
     } // Debug
-    { // Debug::Game
-        ImGui::Begin("Debug::Game");
-        ImGui::Text("Lives: %d", global.game.lives);
-        ImGui::Text("Score: %d", global.game.score);
-        if (ImGui::Button("Reset")) {
-            reset_board();
-        }
-
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-        float button_size = 10.0f;
-        for (int row = 0; row < Constants::n_block_rows; ++row) {
-            for (int col = 0; col < Constants::n_block_cols; ++col) {
-                Block &block = global.game.blocks[row][col];
-
-                char buf[16];
-                std::snprintf(buf, sizeof(buf), "##block_%d_%d", row, col);
-
-                if (!block.active) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-                } else {
-                    Color c_hovered = 0.5f * block.color + 0.5f * Color{1.0f, 1.0f, 1.0f};
-                    Color c_active = 0.3f * block.color + 0.7f * Color{1.0f, 1.0f, 1.0f};
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(block.color.r, block.color.g, block.color.b, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(c_hovered.r, c_hovered.g, c_hovered.b, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(c_active.r, c_active.g, c_active.b, 1.0f));
-                }
-
-                if (ImGui::Button(buf, ImVec2(button_size, button_size))) {
-                    if (block.active) {
-                        destroy_block(row, col);
-                    } else {
-                        block.active = true;
-                    }
-                }
-
-                ImGui::PopStyleColor(3);
-
-                if (col < Constants::n_block_cols - 1)
-                    ImGui::SameLine();
-            }
-        }
-        ImGui::PopStyleVar(2);
-
-        ImGui::Text("Ball Position: (%f, %f)", global.ball.position.x, global.ball.position.y);
-        ImGui::Text("Ball Direction: (%f, %f)", global.ball_direction.x, global.ball_direction.y);
-        ImGui::Text("Paddle Position: (%f, %f)", global.paddle.position.x, global.paddle.position.y);
-        ImGui::End();
-    } // Debug::Game
-
     ImGui::Render();
 }
 
-auto move_paddle(float move_amount) -> void {
-    float new_pos = global.paddle.position.x + move_amount;
-    global.paddle.position.x = glm::clamp(new_pos, -1.0f, 1.0f - global.paddle.width);
-}
-
 auto _main_handle_inputs() -> void {
+    int mouse_x, mouse_y;
+    SDL_GetMouseState(&mouse_x, &mouse_y);
+    global.mouse_pos = Position{
+        static_cast<float>(mouse_x) / Constants::window_width,
+        static_cast<float>(mouse_y) / Constants::window_height};
+
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL2_ProcessEvent(&event);
@@ -374,15 +324,11 @@ auto _main_handle_inputs() -> void {
             case SDLK_ESCAPE:
                 global.running = false;
                 break;
-            case SDLK_d:
-                move_paddle(global.paddle_speed);
-                break;
-            case SDLK_a:
-                move_paddle(-global.paddle_speed);
-                break;
-            default:
-                break;
             }
+        }
+
+        if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+            std::cout << "Mouse Clicked at: (" << global.mouse_pos.x << ", " << global.mouse_pos.y << ")\n";
         }
     }
 }
@@ -402,32 +348,25 @@ auto _main_render() -> void {
     glClear(GL_COLOR_BUFFER_BIT);
 
     glUseProgram(global.shader_program);
-    glBindVertexArray(global.paddle_vao);
+    glUniform1f(global.ubo.time, static_cast<float>(global.runtime.count()));
 
-    glUniform1f(global.ubo.time, (float)global.runtime.count());
+    glBindVertexArray(global.vao_square);
 
-    { // Paddle
-        _gl_set_box_ubo(global.paddle);
-        _gl_set_color_ubo(global.color.paddle);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-    }
-    { // Ball
-        _gl_set_box_ubo(global.ball);
-        _gl_set_color_ubo(global.color.ball);
+    _gl_set_color_ubo(global.color.path_marker);
+    for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
+        _gl_set_box_ubo(global.path_markers[marker_idx]);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
 
-    { // Blocks
-        for (size_t row = 0; row < Constants::n_block_rows; ++row) {
-            for (size_t col = 0; col < Constants::n_block_cols; ++col) {
-                Block &block = global.game.blocks[row][col];
-                if (block.active) {
-                    _gl_set_box_ubo(block.box);
-                    _gl_set_color_ubo(block.color);
-                    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-                }
-            }
-        }
+    for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
+        Enemy &enemy = global.enemies[enemy_idx];
+        if (!enemy.is_active) continue;
+
+        float health_pct = static_cast<float>(enemy.hp) / enemy.hp_max;
+        _gl_set_color_ubo(health_pct * global.color.enemy + (1 - health_pct) * Constants::Color::black);
+        _gl_set_box_ubo(enemy.box);
+
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
 
     glBindVertexArray(0);
@@ -548,10 +487,10 @@ auto setup_shader_program() -> void {
     global.ubo.color = glGetUniformLocation(global.shader_program, "u_Color");
 }
 
-auto setup_paddle_vao() -> void {
+auto setup_vao_square() -> void {
     // 1) Generate and bind the VAO up front
-    glGenVertexArrays(1, &global.paddle_vao);
-    glBindVertexArray(global.paddle_vao);
+    glGenVertexArrays(1, &global.vao_square);
+    glBindVertexArray(global.vao_square);
 
     // 2) Create VBO, upload vertex data, set attribute pointers
     gl_VBO vbo;
@@ -592,85 +531,29 @@ auto cleanup() -> void {
     SDL_Quit();
 }
 
-void _main_game_logic() {
-    auto ball_delta = global.ball_direction * (global.ball_speed / (global.delta_time.count() + 1));
-    global.ball.position += ball_delta;
-
-    constexpr float deadzone = Constants::paddle_collision_deadzone;
-
-    // Block Collision
-    for (size_t row_idx = 0; row_idx < global.game.blocks.size(); ++row_idx) {
-        auto &row = global.game.blocks[row_idx];
-        for (size_t col_idx = 0; col_idx < row.size(); ++col_idx) {
-            Block &blk = row[col_idx];
-            if (!blk.active) continue;
-            CollisionDirection cd = collision_box_box_directional(global.ball, blk.box);
-            if (cd != CollisionDirection::None) {
-                destroy_block(row_idx, col_idx);
-                if (cd == CollisionDirection::Left || cd == CollisionDirection::Right) {
-                    global.ball_direction.x = -global.ball_direction.x;
-                } else {
-                    global.ball_direction.y = -global.ball_direction.y;
-                }
-                return;
-            }
-        }
-    }
-
-    // Paddle Collision
-    CollisionDirection cd = collision_box_box_directional(global.ball, global.paddle);
-    if (cd != CollisionDirection::None) {
-        switch (cd) {
-        case CollisionDirection::None:
-            break;
-        case CollisionDirection::Left:
-            global.ball_direction.x = -global.ball_direction.x;
-            global.ball.position.x = global.paddle.position.x - global.ball.width - deadzone;
-            break;
-        case CollisionDirection::Right:
-            global.ball_direction.x = -global.ball_direction.x;
-            global.ball.position.x = global.paddle.position.x + global.paddle.width + deadzone;
-            break;
-        case CollisionDirection::Top:
-            global.ball_direction.y = -global.ball_direction.y;
-            global.ball.position.y = global.paddle.position.y + global.ball.height + deadzone;
-            break;
-        case CollisionDirection::Bottom:
-            global.ball_direction.y = -global.ball_direction.y;
-            global.ball.position.y = global.paddle.position.y - global.paddle.height - deadzone;
-            break;
-        }
-        return;
-    }
-
-    bool ball_touched_right_wall = global.ball.position.x + global.ball.width >= 1.0f;
-    bool ball_touched_left_wall = global.ball.position.x <= -1.0f;
-    bool ball_touched_top_wall = global.ball.position.y >= 1.0f;
-    bool ball_touched_bottom_wall = global.ball.position.y - global.ball.height <= -1.0f;
-
-    if (ball_touched_right_wall) {
-        global.ball.position.x = 1.0f - global.ball.width - deadzone;
-        global.ball_direction.x = -global.ball_direction.x;
-    } else if (ball_touched_left_wall) {
-        global.ball.position.x = -1.0f + deadzone;
-        global.ball_direction.x = -global.ball_direction.x;
-    } else if (ball_touched_top_wall) {
-        global.ball.position.y = 1.0f - deadzone;
-        global.ball_direction.y = -global.ball_direction.y;
-    } else if (ball_touched_bottom_wall) {
-        global.ball.position.y = -1.0f + +global.ball.height + deadzone;
-        global.ball_direction.y = -global.ball_direction.y;
-    }
-}
-
 auto main(int argc, char **argv) -> int {
     if (!setup()) panic("Setup failed!");
 
     setup_shader_program();
+    setup_vao_square();
 
-    setup_paddle_vao();
-
-    reset_board();
+    for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
+        Enemy &enemy = global.enemies[enemy_idx];
+        float min_dist = 100000.0f;
+        int min_idx = -1;
+        if (enemy.pathfinding_target == -1) {
+            for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
+                // make this center to center distance instead
+                auto &marker = global.path_markers[marker_idx];
+                float dist = glm::distance(enemy.box.position, marker.position);
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    min_idx = marker_idx;
+                }
+            }
+        }
+        enemy.pathfinding_target = min_idx;
+    }
 
     global.run_start_time = std::chrono::system_clock::now();
     global.running = true;
@@ -682,7 +565,9 @@ auto main(int argc, char **argv) -> int {
         global.runtime = std::chrono::duration_cast<std::chrono::milliseconds>(global.frame_start_time - global.run_start_time);
 
         _main_handle_inputs();
-        _main_game_logic();
+        for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
+            on_tick(&global.enemies[enemy_idx]);
+        }
 
         _main_imgui();
         _main_render();
