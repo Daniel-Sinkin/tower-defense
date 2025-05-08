@@ -19,6 +19,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <unordered_map>
 
 using Color = glm::vec3;
 using Position = glm::vec2;
@@ -223,14 +224,15 @@ struct GameState {
     int score = 0;
 };
 
-struct s_UBO {
-    gl_UBO time;
-    gl_UBO pos;
-    gl_UBO width;
-    gl_UBO height;
-    gl_UBO color;
-    gl_UBO aspect_ratio;
+struct ShaderProgram {
+    gl_ShaderProgram id;
+    std::unordered_map<std::string, gl_UBO> ubos;
+    auto activate() -> void {
+        if (id == GL_ZERO) panic("Trying to activate uninitialized ShaderProgram!");
+        glUseProgram(id);
+    }
 };
+
 struct s_Color {
     Color background{0.2f, 0.2f, 0.31f};
     Color path_marker{1.0f, 0.0f, 1.0f};
@@ -249,13 +251,13 @@ struct Global {
     ImGuiIO imgui_io;
     SDL_GLContext gl_context;
 
-    gl_ShaderProgram shader_program;
-    gl_ShaderProgram shader_program_tower_range;
+    ShaderProgram shader_program_single_color;
+    ShaderProgram shader_program_tower_range;
+
     gl_VAO vao_square;
     gl_VAO vao_circle;
     gl_VAO vao_triangle;
-    gl_VAO vao_NONE = 0; // TODO: Maybe move this to Constants
-    s_UBO ubo;
+    gl_VAO vao_NONE = GL_ZERO; // TODO: Maybe move this to Constants
 
     s_Color color;
 
@@ -435,13 +437,13 @@ auto _main_handle_inputs() -> void {
     }
 }
 
-auto _gl_set_box_ubo(const Box box) -> void {
-    glUniform2f(global.ubo.pos, box.position.x, box.position.y);
-    glUniform1f(global.ubo.width, box.width);
-    glUniform1f(global.ubo.height, box.height);
+auto _gl_set_box_ubo(ShaderProgram sp, const Box box) -> void {
+    glUniform2f(sp.ubos["u_Pos"], box.position.x, box.position.y);
+    glUniform1f(sp.ubos["u_Width"], box.width);
+    glUniform1f(sp.ubos["u_Height"], box.width);
 }
-auto _gl_set_color_ubo(const Color color) -> void {
-    glUniform3f(global.ubo.color, color.r, color.g, color.b);
+auto _gl_set_color_ubo(ShaderProgram sp, const Color color) -> void {
+    glUniform3f(sp.ubos["u_Color"], color.r, color.g, color.b);
 }
 
 auto _main_render() -> void {
@@ -449,72 +451,80 @@ auto _main_render() -> void {
     glClearColor(global.color.background.r, global.color.background.g, global.color.background.b, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    glUseProgram(global.shader_program);
-    glUniform1f(global.ubo.time, static_cast<float>(global.runtime.count()));
+    {
+        global.shader_program_single_color.activate();
+        glUniform1f(global.shader_program_single_color.ubos["u_Time"], static_cast<float>(global.runtime.count()));
 
-    { // Circle VAO
-        glBindVertexArray(global.vao_circle);
-        for (size_t tower_idx = 0; tower_idx < global.towers.size(); ++tower_idx) {
-            Tower &tower = global.towers[tower_idx];
-            if (!tower.is_active) continue;
+        { // Triangle VAO
+            glBindVertexArray(global.vao_triangle);
+            for (size_t tower_idx = 0; tower_idx < global.towers.size(); ++tower_idx) {
+                Tower &tower = global.towers[tower_idx];
+                if (!tower.is_active) continue;
 
-            _gl_set_color_ubo(global.color.tower_radius);
+                switch (tower.type) {
+                case TowerType::Fire:
+                    _gl_set_color_ubo(global.shader_program_single_color, global.color.tower_fire);
+                    break;
+                case TowerType::Ice:
+                    _gl_set_color_ubo(global.shader_program_single_color, global.color.tower_ice);
+                    break;
+                case TowerType::Buff:
+                    _gl_set_color_ubo(global.shader_program_single_color, global.color.tower_buff);
+                    break;
+                default:
+                    panic("Unknown Tower Type!");
+                    break;
+                }
+                _gl_set_box_ubo(global.shader_program_single_color, tower.box);
 
-            float tower_range = global.tower_table_range[tower.level];
-            auto box_shifted = Box{tower.box.get_center(), tower_range, tower_range};
-            _gl_set_box_ubo(box_shifted);
-            glDrawElements(GL_TRIANGLES, Constants::circle_indices.size(), GL_UNSIGNED_INT, 0);
-        }
-        glBindVertexArray(global.vao_NONE);
-    } // Circle VAO
-
-    { // Triangle VAO
-        glBindVertexArray(global.vao_triangle);
-        for (size_t tower_idx = 0; tower_idx < global.towers.size(); ++tower_idx) {
-            Tower &tower = global.towers[tower_idx];
-            if (!tower.is_active) continue;
-
-            switch (tower.type) {
-            case TowerType::Fire:
-                _gl_set_color_ubo(global.color.tower_fire);
-                break;
-            case TowerType::Ice:
-                _gl_set_color_ubo(global.color.tower_ice);
-                break;
-            case TowerType::Buff:
-                _gl_set_color_ubo(global.color.tower_buff);
-                break;
-            default:
-                panic("Unknown Tower Type!");
-                break;
+                glDrawElements(GL_TRIANGLES, Constants::triangle_indices.size(), GL_UNSIGNED_INT, 0);
             }
-            _gl_set_box_ubo(tower.box);
+            glBindVertexArray(global.vao_NONE);
+        } // Triangle VAO
 
-            glDrawElements(GL_TRIANGLES, Constants::triangle_indices.size(), GL_UNSIGNED_INT, 0);
-        }
-        glBindVertexArray(global.vao_NONE);
-    } // Triangle VAO
+        { // Square VAO
+            glBindVertexArray(global.vao_square);
+            _gl_set_color_ubo(global.shader_program_single_color, global.color.path_marker);
+            for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
+                _gl_set_box_ubo(global.shader_program_single_color, global.path_markers[marker_idx]);
+                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+            }
 
-    { // Square VAO
-        glBindVertexArray(global.vao_square);
-        _gl_set_color_ubo(global.color.path_marker);
-        for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
-            _gl_set_box_ubo(global.path_markers[marker_idx]);
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-        }
+            for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
+                Enemy &enemy = global.enemies[enemy_idx];
+                if (!enemy.is_active) continue;
 
-        for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
-            Enemy &enemy = global.enemies[enemy_idx];
-            if (!enemy.is_active) continue;
+                float health_pct = static_cast<float>(enemy.hp) / enemy.hp_max;
+                _gl_set_color_ubo(global.shader_program_single_color, health_pct * global.color.enemy + (1 - health_pct) * Constants::Color::black);
+                _gl_set_box_ubo(global.shader_program_single_color, enemy.box);
 
-            float health_pct = static_cast<float>(enemy.hp) / enemy.hp_max;
-            _gl_set_color_ubo(health_pct * global.color.enemy + (1 - health_pct) * Constants::Color::black);
-            _gl_set_box_ubo(enemy.box);
+                glDrawElements(GL_TRIANGLES, Constants::square_indices.size(), GL_UNSIGNED_INT, 0);
+            }
+            glBindVertexArray(global.vao_NONE);
+        } // Square VAO
+    }
+    {
+        global.shader_program_tower_range.activate();
+        glUniform1f(global.shader_program_tower_range.ubos["u_Time"], static_cast<float>(global.runtime.count()));
 
-            glDrawElements(GL_TRIANGLES, Constants::square_indices.size(), GL_UNSIGNED_INT, 0);
-        }
-        glBindVertexArray(global.vao_NONE);
-    } // Square VAO
+        { // Circle VAO
+            glBindVertexArray(global.vao_circle);
+            for (size_t tower_idx = 0; tower_idx < global.towers.size(); ++tower_idx) {
+                Tower &tower = global.towers[tower_idx];
+                if (!tower.is_active) continue;
+
+                _gl_set_color_ubo(global.shader_program_tower_range, global.color.tower_radius);
+
+                float tower_range = global.tower_table_range[tower.level];
+                auto box_shifted = Box{tower.box.get_center(), tower_range, tower_range};
+                _gl_set_box_ubo(global.shader_program_tower_range, box_shifted);
+                glUniform1f(global.shader_program_tower_range.ubos["u_Radius"], tower_range);
+                glUniform2f(global.shader_program_tower_range.ubos["u_Pos"], tower.box.get_center().x, tower.box.get_center().y);
+                glDrawElements(GL_TRIANGLES, Constants::circle_indices.size(), GL_UNSIGNED_INT, 0);
+            }
+            glBindVertexArray(global.vao_NONE);
+        } // Circle VAO
+    }
 }
 
 /*
@@ -602,52 +612,78 @@ auto compile_shader_from_file(const char *filepath, GLenum shader_type) -> gl_Sh
     return shader;
 }
 
-auto compile_tower_range_shader() -> void {
-    gl_Shader vertex_shader = compile_shader_from_file(Constants::fp_vertex_shader, GL_VERTEX_SHADER);
-    if (vertex_shader == 0) panic("Failed to compile vertex shader.");
-    gl_Shader fragment_shader = compile_shader_from_file(Constants::fp_fragment_tower_range_shader, GL_FRAGMENT_SHADER);
-    if (fragment_shader == 0) panic("Failed to compile fragment shader.");
-
-    global.shader_program_tower_range = glCreateProgram();
-
-    glAttachShader(global.shader_program_tower_range, vertex_shader);
-    glAttachShader(global.shader_program_tower_range, fragment_shader);
-
-    glLinkProgram(global.shader_program_tower_range);
-    // Check link errors:
-    glGetProgramiv(global.shader_program_tower_range, GL_LINK_STATUS, &global.gl_success);
-    if (!global.gl_success) {
-        glGetProgramInfoLog(global.shader_program_tower_range, 512, nullptr, global.gl_error_buffer);
-        panic(std::string("Shader Program Link Failed: ") + global.gl_error_buffer);
-    }
-
-    glUseProgram(global.shader_program_tower_range);
-    glDeleteShader(vertex_shader);
-    glDeleteShader(fragment_shader);
-}
-
-auto compile_shader_program() -> void {
+auto compile_shader_program_single_color() -> void {
     gl_Shader vertex_shader = compile_shader_from_file(Constants::fp_vertex_shader, GL_VERTEX_SHADER);
     if (vertex_shader == 0) panic("Failed to compile vertex shader.");
     gl_Shader fragment_shader = compile_shader_from_file(Constants::fp_fragment_shader, GL_FRAGMENT_SHADER);
     if (fragment_shader == 0) panic("Failed to compile fragment shader.");
 
-    global.shader_program = glCreateProgram();
+    global.shader_program_single_color.id = glCreateProgram();
 
-    glAttachShader(global.shader_program, vertex_shader);
-    glAttachShader(global.shader_program, fragment_shader);
+    glAttachShader(global.shader_program_single_color.id, vertex_shader);
+    glAttachShader(global.shader_program_single_color.id, fragment_shader);
 
-    glLinkProgram(global.shader_program);
-    // Check link errors:
-    glGetProgramiv(global.shader_program, GL_LINK_STATUS, &global.gl_success);
+    glLinkProgram(global.shader_program_single_color.id);
+    glGetProgramiv(global.shader_program_single_color.id, GL_LINK_STATUS, &global.gl_success);
     if (!global.gl_success) {
-        glGetProgramInfoLog(global.shader_program, 512, nullptr, global.gl_error_buffer);
+        glGetProgramInfoLog(global.shader_program_single_color.id, 512, nullptr, global.gl_error_buffer);
         panic(std::string("Shader Program Link Failed: ") + global.gl_error_buffer);
     }
 
-    glUseProgram(global.shader_program);
+    global.shader_program_single_color.activate();
+
     glDeleteShader(vertex_shader);
     glDeleteShader(fragment_shader);
+
+    std::vector<std::string> uniformNames = {
+        "u_Time",
+        "u_Pos",
+        "u_Width",
+        "u_Height",
+        "u_Color",
+        "u_AspectRatio"};
+
+    for (const std::string &name : uniformNames) {
+        global.shader_program_single_color.ubos[name] = glGetUniformLocation(global.shader_program_single_color.id, name.c_str());
+    }
+    glUniform1f(global.shader_program_single_color.ubos["u_AspectRatio"], Constants::aspect_ratio);
+}
+auto compile_shader_program_tower_radius() -> void {
+    gl_Shader vertex_shader = compile_shader_from_file(Constants::fp_vertex_shader, GL_VERTEX_SHADER);
+    if (vertex_shader == 0) panic("Failed to compile vertex shader.");
+    gl_Shader fragment_shader = compile_shader_from_file(Constants::fp_fragment_tower_range_shader, GL_FRAGMENT_SHADER);
+    if (fragment_shader == 0) panic("Failed to compile fragment shader.");
+
+    global.shader_program_tower_range.id = glCreateProgram();
+
+    glAttachShader(global.shader_program_tower_range.id, vertex_shader);
+    glAttachShader(global.shader_program_tower_range.id, fragment_shader);
+
+    glLinkProgram(global.shader_program_tower_range.id);
+    glGetProgramiv(global.shader_program_tower_range.id, GL_LINK_STATUS, &global.gl_success);
+    if (!global.gl_success) {
+        glGetProgramInfoLog(global.shader_program_tower_range.id, 512, nullptr, global.gl_error_buffer);
+        panic(std::string("Shader Program Link Failed: ") + global.gl_error_buffer);
+    }
+
+    global.shader_program_tower_range.activate();
+
+    glDeleteShader(vertex_shader);
+    glDeleteShader(fragment_shader);
+
+    std::vector<std::string> uniformNames = {
+        "u_Time",
+        "u_Pos",
+        "u_Width",
+        "u_Height",
+        "u_Color",
+        "u_Radius",
+        "u_AspectRatio"};
+
+    for (const std::string &name : uniformNames) {
+        global.shader_program_tower_range.ubos[name] = glGetUniformLocation(global.shader_program_tower_range.id, name.c_str());
+    }
+    glUniform1f(global.shader_program_tower_range.ubos["u_AspectRatio"], Constants::aspect_ratio);
 }
 
 auto create_vao_square() -> void {
@@ -770,19 +806,12 @@ auto cleanup() -> void {
 auto main(int argc, char **argv) -> int {
     if (!setup()) panic("Setup failed!");
 
-    compile_shader_program();
-    global.ubo.time = glGetUniformLocation(global.shader_program, "u_Time");
-    global.ubo.pos = glGetUniformLocation(global.shader_program, "u_Pos");
-    global.ubo.width = glGetUniformLocation(global.shader_program, "u_Width");
-    global.ubo.height = glGetUniformLocation(global.shader_program, "u_Height");
-    global.ubo.color = glGetUniformLocation(global.shader_program, "u_Color");
-    global.ubo.aspect_ratio = glGetUniformLocation(global.shader_program, "u_AspectRatio");
+    compile_shader_program_single_color();
+    compile_shader_program_tower_radius();
 
     create_vao_square();
     create_vao_triangle();
     creat_vao_triangle();
-
-    glUniform1f(global.ubo.aspect_ratio, Constants::aspect_ratio);
 
     for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
         Enemy &enemy = global.enemies[enemy_idx];
