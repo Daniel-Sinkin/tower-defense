@@ -53,6 +53,34 @@ struct Constants {
         0, 1, 3,
         1, 2, 3};
 
+    static constexpr std::array<float, 51> circle_vertices = {
+        0.000000f, 0.000000f, 0.000000f,
+        0.500000f, 0.000000f, 0.000000f,
+        0.461940f, 0.191342f, 0.000000f,
+        0.353553f, 0.353553f, 0.000000f,
+        0.191342f, 0.461940f, 0.000000f,
+        0.000000f, 0.500000f, 0.000000f,
+        -0.191342f, 0.461940f, 0.000000f,
+        -0.353553f, 0.353553f, 0.000000f,
+        -0.461940f, 0.191342f, 0.000000f,
+        -0.500000f, 0.000000f, 0.000000f,
+        -0.461940f, -0.191342f, 0.000000f,
+        -0.353553f, -0.353553f, 0.000000f,
+        -0.191342f, -0.461940f, 0.000000f,
+        -0.000000f, -0.500000f, 0.000000f,
+        0.191342f, -0.461940f, 0.000000f,
+        0.353553f, -0.353553f, 0.000000f,
+        0.461940f, -0.191342f, 0.000000f};
+
+    // Triangle-fan indices  → 16 triangles = 48 indices
+    static constexpr std::array<unsigned int, 48> circle_indices = {
+        0, 1, 2, 0, 2, 3, 0, 3, 4,
+        0, 4, 5, 0, 5, 6, 0, 6, 7,
+        0, 7, 8, 0, 8, 9, 0, 9, 10,
+        0, 10, 11, 0, 11, 12, 0, 12, 13,
+        0, 13, 14, 0, 14, 15, 0, 15, 16,
+        0, 16, 1};
+
     struct Color {
         static constexpr auto white = glm::vec3(1.0f, 1.0f, 1.0f);
         static constexpr auto black = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -160,6 +188,20 @@ struct Enemy {
         this->hp -= amount;
     }
 };
+
+enum class TowerType {
+    Fire,
+    Ice,
+    Buff,
+    NumTowerType
+};
+struct Tower {
+    bool is_active;
+    TowerType type;
+    Box box;
+    int level;
+};
+
 struct GameState {
     int score = 0;
 };
@@ -172,9 +214,12 @@ struct s_UBO {
     gl_UBO color;
 };
 struct s_Color {
-    Color background{0.2f, 0.7f, 0.31f};
+    Color background{0.2f, 0.2f, 0.31f};
     Color path_marker{1.0f, 0.0f, 1.0f};
     Color enemy{1.0f, 0.0f, 0.0f};
+    Color tower{0.1f, 0.3f, 0.9f};
+    Color tower_radius{0.1f, 0.8f, 0.0f};
+    Color projectile{1.0f, 1.0f, 1.0f};
 };
 
 struct Global {
@@ -186,6 +231,7 @@ struct Global {
 
     gl_ShaderProgram shader_program;
     gl_VAO vao_square;
+    gl_VAO vao_circle;
     s_UBO ubo;
 
     s_Color color;
@@ -199,26 +245,31 @@ struct Global {
     std::chrono::milliseconds runtime;
 
     std::array<Box, 15> path_markers = {
-        Box{window_normalized_to_ndc(Position{0.131250, 0.931944}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.133594, 0.729167}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.173438, 0.573611}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.243750, 0.436111}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.350781, 0.204167}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.411719, 0.163889}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.441406, 0.227778}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.477344, 0.355556}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.524219, 0.583333}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.596094, 0.820833}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.667969, 0.786111}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.710156, 0.558333}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.716406, 0.368056}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.774219, 0.226389}), Constants::path_marker_width, Constants::path_marker_height},
-        Box{window_normalized_to_ndc(Position{0.939844, 0.166667}), Constants::path_marker_width, Constants::path_marker_height}};
+        Box{window_normalized_to_ndc(Position{0.131f, 0.931f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.133f, 0.729f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.173f, 0.573f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.243f, 0.436f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.350f, 0.204f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.411f, 0.163f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.441f, 0.227f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.477f, 0.355f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.524f, 0.583f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.596f, 0.820f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.667f, 0.786f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.710f, 0.558f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.716f, 0.368f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.774f, 0.226f}), Constants::path_marker_width, Constants::path_marker_height},
+        Box{window_normalized_to_ndc(Position{0.939f, 0.166f}), Constants::path_marker_width, Constants::path_marker_height}};
 
     std::vector<Enemy> enemies = {
         Enemy{true, 100, 100, Box{Position{0.0f, 0.0f}, 0.05f / Constants::aspect_ratio, 0.05f}},
         Enemy{true, 100, 500, Box{Position{0.2f, 0.0f}, 0.05f / Constants::aspect_ratio, 0.05f}},
         Enemy{true, 300, 300, Box{Position{-0.2f, 0.0f}, 0.05f / Constants::aspect_ratio, 0.05f}}};
+
+    std::vector<Tower> towers = {
+        Tower{true, TowerType::Fire, Box{window_normalized_to_ndc(Position{0.371f, 0.616f}), 0.1f / Constants::aspect_ratio, 0.05f}},
+        Tower{true, TowerType::Fire, Box{window_normalized_to_ndc(Position{0.897f, 0.465f}), 0.1f / Constants::aspect_ratio, 0.05f}},
+    };
 
     int gl_success;
     char gl_error_buffer[512];
@@ -226,18 +277,20 @@ struct Global {
     GameState game;
 };
 Global global;
-auto on_tick(Enemy *enemy) -> void {
+
+auto on_tick_enemy(Enemy *enemy) -> void {
     if (!enemy->is_active) return;
     auto &target = global.path_markers[enemy->pathfinding_target];
     float dist_to_target = glm::distance(target.position, enemy->box.position);
     if (dist_to_target < 0.01f) {
-        enemy->pathfinding_target = (enemy->pathfinding_target + 1 % global.path_markers.size());
+        enemy->pathfinding_target = (enemy->pathfinding_target + 1) % global.path_markers.size();
     }
 
     glm::vec2 dir = normalize(target.position - enemy->box.position);
+    dir.y *= Constants::aspect_ratio;
 
     // TODO: Might need to normalize for aspect ratio
-    enemy->box.position += dir * 0.001f;
+    enemy->box.position += dir * 0.007f;
 
     if (enemy->is_active) {
         if (enemy->hp <= 0) enemy->death();
@@ -350,26 +403,49 @@ auto _main_render() -> void {
     glUseProgram(global.shader_program);
     glUniform1f(global.ubo.time, static_cast<float>(global.runtime.count()));
 
-    glBindVertexArray(global.vao_square);
+    { // Square VAO
+        glBindVertexArray(global.vao_square);
+        _gl_set_color_ubo(global.color.path_marker);
+        for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
+            _gl_set_box_ubo(global.path_markers[marker_idx]);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        }
 
-    _gl_set_color_ubo(global.color.path_marker);
-    for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
-        _gl_set_box_ubo(global.path_markers[marker_idx]);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-    }
+        for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
+            Enemy &enemy = global.enemies[enemy_idx];
+            if (!enemy.is_active) continue;
 
-    for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
-        Enemy &enemy = global.enemies[enemy_idx];
-        if (!enemy.is_active) continue;
+            float health_pct = static_cast<float>(enemy.hp) / enemy.hp_max;
+            _gl_set_color_ubo(health_pct * global.color.enemy + (1 - health_pct) * Constants::Color::black);
+            _gl_set_box_ubo(enemy.box);
 
-        float health_pct = static_cast<float>(enemy.hp) / enemy.hp_max;
-        _gl_set_color_ubo(health_pct * global.color.enemy + (1 - health_pct) * Constants::Color::black);
-        _gl_set_box_ubo(enemy.box);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        }
 
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-    }
+        for (size_t tower_idx = 0; tower_idx < global.towers.size(); ++tower_idx) {
+            Tower &tower = global.towers[tower_idx];
+            if (!tower.is_active) continue;
 
-    glBindVertexArray(0);
+            _gl_set_color_ubo(global.color.tower);
+            _gl_set_box_ubo(tower.box);
+
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        }
+        glBindVertexArray(0);
+    } // Square VAO
+
+    { // Circle VAO
+        glBindVertexArray(global.vao_square);
+        for (size_t tower_idx = 0; tower_idx < global.towers.size(); ++tower_idx) {
+            Tower &tower = global.towers[tower_idx];
+            if (!tower.is_active) continue;
+
+            _gl_set_color_ubo(global.color.tower);
+            _gl_set_box_ubo(tower.box);
+            glDrawElements(GL_TRIANGLES, 48, GL_UNSIGNED_INT, 0);
+        }
+        glBindVertexArray(0);
+    } // Circle VAO
 }
 
 /*
@@ -521,6 +597,44 @@ auto setup_vao_square() -> void {
     glBindVertexArray(0);
 }
 
+auto setup_vao_circle() -> void {
+    // 1) Generate and bind the VAO up front
+    glGenVertexArrays(1, &global.vao_circle);
+    glBindVertexArray(global.vao_circle);
+
+    // 2) Create VBO, upload vertex data, set attribute pointers
+    gl_VBO vbo;
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        sizeof(Constants::circle_vertices),
+        Constants::circle_vertices.data(),
+        GL_STATIC_DRAW);
+    glVertexAttribPointer(
+        0, // location = 0 in your vertex shader
+        3, // 3 floats per vertex (x, y, z)
+        GL_FLOAT,
+        GL_FALSE,
+        3 * sizeof(float), // stride
+        (void *)0          // offset
+    );
+    glEnableVertexAttribArray(0);
+
+    // 3) Create EBO *while the VAO is still bound*, so the binding is stored in it
+    gl_EBO ebo;
+    glGenBuffers(1, &ebo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+    glBufferData(
+        GL_ELEMENT_ARRAY_BUFFER,
+        sizeof(Constants::circle_indices),
+        Constants::circle_indices.data(),
+        GL_STATIC_DRAW);
+
+    // 4) Unbind VAO (optional but good practice)
+    glBindVertexArray(0);
+}
+
 auto cleanup() -> void {
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL2_Shutdown();
@@ -566,7 +680,7 @@ auto main(int argc, char **argv) -> int {
 
         _main_handle_inputs();
         for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
-            on_tick(&global.enemies[enemy_idx]);
+            on_tick_enemy(&global.enemies[enemy_idx]);
         }
 
         _main_imgui();
