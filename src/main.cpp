@@ -451,9 +451,10 @@ auto _main_render() -> void {
     glClearColor(global.color.background.r, global.color.background.g, global.color.background.b, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    {
-        global.shader_program_single_color.activate();
-        glUniform1f(global.shader_program_single_color.ubos["u_Time"], static_cast<float>(global.runtime.count()));
+    { // Single Color Shader Program
+        ShaderProgram &shader = global.shader_program_single_color;
+        shader.activate();
+        glUniform1f(shader.ubos["u_Time"], static_cast<float>(global.runtime.count()));
 
         { // Triangle VAO
             glBindVertexArray(global.vao_triangle);
@@ -475,7 +476,7 @@ auto _main_render() -> void {
                     panic("Unknown Tower Type!");
                     break;
                 }
-                _gl_set_box_ubo(global.shader_program_single_color, tower.box);
+                _gl_set_box_ubo(shader, tower.box);
 
                 glDrawElements(GL_TRIANGLES, Constants::triangle_indices.size(), GL_UNSIGNED_INT, 0);
             }
@@ -484,9 +485,9 @@ auto _main_render() -> void {
 
         { // Square VAO
             glBindVertexArray(global.vao_square);
-            _gl_set_color_ubo(global.shader_program_single_color, global.color.path_marker);
+            _gl_set_color_ubo(shader, global.color.path_marker);
             for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
-                _gl_set_box_ubo(global.shader_program_single_color, global.path_markers[marker_idx]);
+                _gl_set_box_ubo(shader, global.path_markers[marker_idx]);
                 glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
             }
 
@@ -495,17 +496,18 @@ auto _main_render() -> void {
                 if (!enemy.is_active) continue;
 
                 float health_pct = static_cast<float>(enemy.hp) / enemy.hp_max;
-                _gl_set_color_ubo(global.shader_program_single_color, health_pct * global.color.enemy + (1 - health_pct) * Constants::Color::black);
-                _gl_set_box_ubo(global.shader_program_single_color, enemy.box);
+                _gl_set_color_ubo(shader, health_pct * global.color.enemy + (1 - health_pct) * Constants::Color::black);
+                _gl_set_box_ubo(shader, enemy.box);
 
                 glDrawElements(GL_TRIANGLES, Constants::square_indices.size(), GL_UNSIGNED_INT, 0);
             }
             glBindVertexArray(global.vao_NONE);
         } // Square VAO
     }
-    {
-        global.shader_program_tower_range.activate();
-        glUniform1f(global.shader_program_tower_range.ubos["u_Time"], static_cast<float>(global.runtime.count()));
+    { // Tower Range Shader Program
+        ShaderProgram &shader = global.shader_program_tower_range;
+        shader.activate();
+        glUniform1f(shader.ubos["u_Time"], static_cast<float>(global.runtime.count()));
 
         { // Circle VAO
             glBindVertexArray(global.vao_circle);
@@ -513,13 +515,13 @@ auto _main_render() -> void {
                 Tower &tower = global.towers[tower_idx];
                 if (!tower.is_active) continue;
 
-                _gl_set_color_ubo(global.shader_program_tower_range, global.color.tower_radius);
+                _gl_set_color_ubo(shader, global.color.tower_radius);
 
                 float tower_range = global.tower_table_range[tower.level];
                 auto box_shifted = Box{tower.box.get_center(), tower_range, tower_range};
-                _gl_set_box_ubo(global.shader_program_tower_range, box_shifted);
-                glUniform1f(global.shader_program_tower_range.ubos["u_Radius"], tower_range);
-                glUniform2f(global.shader_program_tower_range.ubos["u_Pos"], tower.box.get_center().x, tower.box.get_center().y);
+                _gl_set_box_ubo(shader, box_shifted);
+                glUniform1f(shader.ubos["u_Radius"], tower_range);
+                glUniform2f(shader.ubos["u_Pos"], tower.box.get_center().x, tower.box.get_center().y);
                 glDrawElements(GL_TRIANGLES, Constants::circle_indices.size(), GL_UNSIGNED_INT, 0);
             }
             glBindVertexArray(global.vao_NONE);
@@ -569,6 +571,9 @@ auto setup() -> bool {
         std::cerr << "Failed to initialize GLAD\n";
         return false;
     }
+    // Enables Blending
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
