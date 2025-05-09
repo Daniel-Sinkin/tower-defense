@@ -580,11 +580,11 @@ auto on_tick_projectile(Projectile &proj) -> void {
     if (!proj.is_active) return;
 
     auto duration = std::chrono::duration<float>(global.frame_start_time - proj.spawn_time);
-    if (duration.count() >= 0.2f) {
+    if (duration.count() >= 1.0f) {
         proj.is_active = false;
         return;
     }
-    proj.box.position += 0.05f * proj.dir;
+    proj.box.position += 0.01f * proj.dir;
     for (auto &enemy : global.game.enemies) {
         if (collision_box_box(proj.box, enemy.box)) {
             const Tower &tower = proj_get_tower(proj);
