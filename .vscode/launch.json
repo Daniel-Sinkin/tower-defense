@@ -1,0 +1,23 @@
+// .vscode/launch.json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // any name you like
+            "name": "Debug tower-defense (LLDB)",
+            // use the CodeLLDB adapter
+            "type": "lldb",
+            "request": "launch",
+            // your CMake-built binary
+            "program": "${workspaceFolder}/build/main",
+            // working directory
+            "cwd": "${workspaceFolder}/build",
+            // rebuild before launch
+            "preLaunchTask": "CMake: Build",
+            // command-line args if you need them
+            "args": [],
+            // stop at main if you want
+            "stopOnEntry": false
+        }
+    ]
+}

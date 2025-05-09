@@ -155,3 +155,5 @@ target_include_directories(imgui_impl SYSTEM PRIVATE
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
