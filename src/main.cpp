@@ -12,6 +12,8 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
+using glm::vec2;
+using glm::vec3;
 
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
@@ -31,23 +33,23 @@ struct Position {
 
     Position() = default;
     Position(float x_, float y_) : x(x_), y(y_) {}
-    Position(const glm::vec2 &v) : x(v.x), y(v.y) {}
-    operator glm::vec2() const { return {x, y}; }
+    Position(const vec2 &v) : x(v.x), y(v.y) {}
+    operator vec2() const { return {x, y}; }
 
-    Position operator+(const glm::vec2 &v) const { return Position{x + v.x, y + v.y}; }
-    Position operator-(const glm::vec2 &v) const { return Position{x - v.x, y - v.y}; }
-    Position &operator+=(const glm::vec2 &v) {
+    Position operator+(const vec2 &v) const { return Position{x + v.x, y + v.y}; }
+    Position operator-(const vec2 &v) const { return Position{x - v.x, y - v.y}; }
+    Position &operator+=(const vec2 &v) {
         x += v.x;
         y += v.y;
         return *this;
     }
-    Position &operator-=(const glm::vec2 &v) {
+    Position &operator-=(const vec2 &v) {
         x -= v.x;
         y -= v.y;
         return *this;
     }
 
-    glm::vec2 to_glm() const { return glm::vec2(x, y); }
+    vec2 to_glm() const { return vec2(x, y); }
 };
 
 inline std::ostream &operator<<(std::ostream &os, const Position &p) {
@@ -67,15 +69,15 @@ struct Color {
 
     Color() = default;
     Color(float r_, float g_, float b_) : r(r_), g(g_), b(b_) {}
-    Color(const glm::vec3 &v) : r(v.r), g(v.g), b(v.b) {}
+    Color(const vec3 &v) : r(v.r), g(v.g), b(v.b) {}
     static Color from_u8(uint8_t r, uint8_t g, uint8_t b) {
         return Color(r / 255.0f, g / 255.0f, b / 255.0f);
     }
-    operator glm::vec3() const { return {r, g, b}; }
+    operator vec3() const { return {r, g, b}; }
 
     Color operator*(float f) const { return {r * f, g * f, b * f}; }
     Color operator+(const Color &c) const { return {r + c.r, g + c.g, b + c.b}; }
-    glm::vec3 to_glm() const { return {r, g, b}; }
+    vec3 to_glm() const { return {r, g, b}; }
     float *data() { return &r; }
 
     static Color mix(const Color &a, const Color &b, float t) {
@@ -139,6 +141,8 @@ struct Constants {
     static constexpr float path_marker_width = 0.025f;
     static constexpr float path_marker_height = 0.025f;
 
+    static constexpr std::chrono::duration<float> projectile_life_time = std::chrono::duration<float>(1.0f);
+
     static constexpr std::array<float, 12> square_vertices = {
         1.0f, -1.0f, 0.0f,
         1.0f, 0.0f, 0.0f,
@@ -169,11 +173,11 @@ struct Constants {
         0, 16, 1};
 
     struct Color {
-        static constexpr auto white = glm::vec3(1.0f, 1.0f, 1.0f);
-        static constexpr auto black = glm::vec3(0.0f, 0.0f, 0.0f);
-        static constexpr auto red = glm::vec3(1.0f, 0.0f, 0.0f);
-        static constexpr auto green = glm::vec3(0.0f, 1.0f, 0.0f);
-        static constexpr auto blue = glm::vec3(0.0f, 0.0f, 1.0f);
+        static constexpr auto white = vec3(1.0f, 1.0f, 1.0f);
+        static constexpr auto black = vec3(0.0f, 0.0f, 0.0f);
+        static constexpr auto red = vec3(1.0f, 0.0f, 0.0f);
+        static constexpr auto green = vec3(0.0f, 1.0f, 0.0f);
+        static constexpr auto blue = vec3(0.0f, 0.0f, 1.0f);
     };
 
     static constexpr int max_tower_level = 5;
@@ -284,7 +288,8 @@ struct Enemy {
         this->is_active = false;
     }
     auto take_damage(int amount) -> void {
-        this->hp -= amount;
+        hp -= amount;
+        if (hp <= 0) death();
     }
 };
 
@@ -294,12 +299,42 @@ enum class TowerType {
     Buff,
     NumTowerType
 };
+struct Tower;
+
+struct Projectile {
+    Tower *parent;
+    bool is_active = false;
+    std::chrono::steady_clock::time_point spawn_time;
+    Box box;
+    vec2 dir;
+};
+struct EnemyInRange {
+    int id;
+    float distance;
+};
 struct Tower {
     bool is_active;
     TowerType type;
     Box box;
     int level;
-    std::vector<int> enemies_in_range;
+    std::vector<EnemyInRange> enemies_in_range;
+    std::array<Projectile, 6> projectiles;
+
+    auto find_closest_enemy() const -> std::optional<int> {
+        if (enemies_in_range.empty()) return std::nullopt;
+        auto min_it = std::min_element(
+            enemies_in_range.begin(), enemies_in_range.end(),
+            [](const EnemyInRange &a, const EnemyInRange &b) {
+                return a.distance < b.distance;
+            });
+
+        return min_it->id;
+    }
+    auto init_projectiles() -> void {
+        for (auto &p : projectiles) {
+            p.parent = this;
+        }
+    }
 };
 
 struct ShaderProgram {
@@ -321,14 +356,6 @@ struct s_Color {
     Color tower_radius{0.1f, 0.8f, 0.0f};
     Color projectile{1.0f, 1.0f, 1.0f};
 };
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Position, x, y)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Box, position, width, height)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Enemy, is_active, hp, hp_max, box, pathfinding_target)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Tower, is_active, type, box, level, enemies_in_range)
-// TowerType Serialisation
-inline void to_json(json &j, TowerType t) { j = static_cast<int>(t); }
-inline void from_json(const json &j, TowerType &t) { t = static_cast<TowerType>(j.get<int>()); }
 
 struct GameState {
     int score = 0;
@@ -381,10 +408,10 @@ struct Global {
     Position mouse_pos;
 
     int frame_counter = 0;
-    std::chrono::system_clock::time_point run_start_time;
-    std::chrono::system_clock::time_point frame_start_time;
-    std::chrono::milliseconds delta_time;
-    std::chrono::milliseconds runtime;
+    std::chrono::steady_clock::time_point run_start_time;
+    std::chrono::steady_clock::time_point frame_start_time;
+    std::chrono::duration<float> delta_time;
+    std::chrono::duration<float> runtime;
 
     std::array<float, Constants::max_tower_level> tower_table_range = {0.25f, 0.3f, 0.35f, 0.4f, 0.45f};
     std::array<float, Constants::max_tower_level> damage_table = {10.0f, 20.0f, 30.0f, 40.0f, 50.0f};
@@ -414,6 +441,12 @@ struct Global {
 };
 Global global;
 
+auto init_global() -> void {
+    for (auto &tower : global.game.towers) {
+        tower.init_projectiles();
+    }
+}
+
 auto spawn_tower_at_position(const Position &position) -> void {
     auto box = Box{position, 0.1f, 0.1f};
     global.game.towers.push_back(Tower{true, TowerType::Fire, box, 0});
@@ -440,6 +473,7 @@ auto advance_pathfinding_target(Enemy *enemy) -> void {
         enemy->hp = enemy->hp_max;
     }
 }
+
 auto on_tick_enemy(Enemy *enemy) -> void {
     if (!enemy->is_active) return;
 
@@ -466,7 +500,7 @@ auto on_tick_enemy(Enemy *enemy) -> void {
         if (dist_to_target < 0.01f) {
             advance_pathfinding_target(enemy);
         }
-        glm::vec2 dir = normalize((target.position - enemy->box.position).to_glm());
+        vec2 dir = normalize((target.position - enemy->box.position).to_glm());
         enemy->box.position += dir * 0.007f;
     }
     { // Combining enemies
@@ -508,15 +542,46 @@ auto on_tick_enemy(Enemy *enemy) -> void {
     }
 }
 
+auto shoot_at(Tower &tower, Position pos) -> void {
+    vec2 dir = pos - tower.box.get_center();
+    for (auto &proj : tower.projectiles) {
+        if (!proj.is_active) {
+            proj.box.position = tower.box.get_center();
+            proj.dir = dir;
+            proj.is_active = true;
+            proj.spawn_time = global.frame_start_time;
+            return;
+        }
+    }
+}
+
+auto on_tick_projectile(Projectile *proj) -> void {
+    if (!proj->is_active) return;
+    proj->box.position += 0.01f * proj->dir;
+    for (auto &enemy : global.game.enemies) {
+        if (collision_box_box(proj->box, enemy.box)) {
+            enemy.take_damage(global.damage_table[proj->parent->level]);
+            proj->is_active = false;
+            break;
+        }
+    }
+}
+
 auto on_tick_tower(Tower *tower) -> void {
     if (!tower->is_active) return;
     tower->enemies_in_range.clear();
+
     for (size_t enemy_idx = 0; enemy_idx < global.game.enemies.size(); ++enemy_idx) {
         auto &enemy = global.game.enemies[enemy_idx];
         float dist = distance(tower->box, enemy.box);
         if (dist < global.tower_table_range[tower->level]) {
-            tower->enemies_in_range.push_back(enemy_idx);
+            tower->enemies_in_range.push_back(EnemyInRange{
+                static_cast<int>(enemy_idx), dist});
         }
+    }
+    if (auto closest = tower->find_closest_enemy()) {
+        Enemy enemy = global.game.enemies[*closest];
+        shoot_at(*tower, enemy.box.get_center());
     }
 }
 
@@ -536,25 +601,21 @@ auto format_time(std::chrono::system_clock::time_point tp) -> const char * {
     return buffer;
 }
 
-auto format_duration(std::chrono::milliseconds duration) -> const char * {
+auto format_duration(std::chrono::duration<float> duration) -> const char * {
     static char buffer[32];
-    using namespace std::chrono;
+    auto total_ms = static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
 
-    auto hrs = duration_cast<hours>(duration);
-    duration -= hrs;
-    auto mins = duration_cast<minutes>(duration);
-    duration -= mins;
-    auto secs = duration_cast<seconds>(duration);
-    duration -= secs;
-    auto millis = duration_cast<milliseconds>(duration);
+    auto hrs = total_ms / (60 * 60 * 1000);
+    total_ms %= (60 * 60 * 1000);
+    auto mins = total_ms / (60 * 1000);
+    total_ms %= (60 * 1000);
+    auto secs = total_ms / 1000;
+    auto millis = total_ms % 1000;
 
     std::snprintf(
         buffer, sizeof(buffer),
         "%02lld:%02lld:%02lld.%03lld",
-        static_cast<long long>(hrs.count()),
-        static_cast<long long>(mins.count()),
-        static_cast<long long>(secs.count()),
-        static_cast<long long>(millis.count()));
+        hrs, mins, secs, millis);
 
     return buffer;
 }
@@ -567,10 +628,8 @@ auto _main_imgui() -> void {
         ImGui::Begin("Debug");
         ImGui::ColorEdit3("Background", global.color.background.data());
         ImGui::Text("Frame Counter: %d", global.frame_counter);
-        ImGui::Text("Run Start: %s", format_time(global.run_start_time));
         ImGui::Text("Runtime: %s", format_duration(global.runtime));
-        ImGui::Text("Runtime Count: %lld", global.runtime.count());
-        ImGui::Text("Delta Time (ms): %lld", global.delta_time.count());
+        ImGui::Text("Delta Time (ms): %f", global.delta_time.count());
         ImGui::Text("Score: %d", global.game.score);
         ImGui::Text("Life: %d", global.game.life);
         ImGui::Text("Mouse Position: (%.3f, %.3f)", global.mouse_pos.x, global.mouse_pos.y);
@@ -580,8 +639,8 @@ auto _main_imgui() -> void {
         }
         for (size_t tower_idx = 0; tower_idx < global.game.towers.size(); ++tower_idx) {
             auto &tower = global.game.towers[tower_idx];
-            for (auto &enemy_idx : tower.enemies_in_range) {
-                ImGui::Text("Tower %zu -> Enemy %d", tower_idx, enemy_idx);
+            for (auto &eir : tower.enemies_in_range) {
+                ImGui::Text("Tower %zu -> Enemy %d (dist=%.3f)", tower_idx, eir.id, eir.distance);
             }
         }
         ImGui::End();
@@ -608,28 +667,6 @@ auto _main_handle_inputs() -> void {
             case SDLK_ESCAPE:
                 global.running = false;
                 break;
-            case SDLK_s: {
-                std::cout << "Trying to save gamedata\n";
-                std::ofstream out("gamestate.json");
-                if (!out) panic("Failed to open gamestate.json for writing!");
-
-                json save_data;
-
-                save_data["towers"] = json::array();
-                for (const auto &tower : global.game.towers) {
-                    save_data["towers"].push_back(json(tower));
-                }
-
-                save_data["enemies"] = json::array();
-                for (const auto &enemy : global.game.enemies) {
-                    save_data["enemies"].push_back(json(enemy));
-                }
-
-                out << std::setw(2) << save_data << "\n";
-                break;
-            }
-            case SDLK_l:
-                break;
             case SDLK_e:
                 Position mouse_pos_ndc = window_normalized_to_ndc(global.mouse_pos);
                 spawn_enemy_at_position(mouse_pos_ndc);
@@ -640,7 +677,8 @@ auto _main_handle_inputs() -> void {
         if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
             auto mouse_pos = Position{global.mouse_pos.x, global.mouse_pos.y};
             std::cout << "Mouse Clicked at: " << mouse_pos << "\n";
-            spawn_tower_at_position(window_normalized_to_ndc(mouse_pos));
+            spawn_tower_at_position(
+                window_normalized_to_ndc(mouse_pos) - vec2{0.05f, -0.05f});
         }
         if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_RIGHT) {
             Position mouse_pos_ndc = window_normalized_to_ndc(global.mouse_pos);
@@ -767,7 +805,7 @@ auto setup() -> bool {
         Constants::window_title.data(),
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         Constants::window_width, Constants::window_height,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+        SDL_WINDOW_OPENGL);
     if (!global.window) {
         std::cerr << "Error: SDL_CreateWindow failed: " << SDL_GetError() << "\n";
         SDL_Quit();
@@ -1036,14 +1074,17 @@ auto main(int argc, char **argv) -> int {
     create_vao_triangle();
     creat_vao_triangle();
 
-    global.run_start_time = std::chrono::system_clock::now();
+    init_global();
+
     global.running = true;
+    global.run_start_time = std::chrono::steady_clock::now();
     // For initial delta time computation
-    global.frame_start_time = std::chrono::system_clock::now();
+    global.frame_start_time = global.run_start_time;
     while (global.running) {
-        global.delta_time = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - global.frame_start_time);
-        global.frame_start_time = std::chrono::system_clock::now();
-        global.runtime = std::chrono::duration_cast<std::chrono::milliseconds>(global.frame_start_time - global.run_start_time);
+        auto now = std::chrono::steady_clock::now();
+        global.delta_time = now - global.frame_start_time;
+        global.frame_start_time = now;
+        global.runtime = now - global.run_start_time;
 
         _main_handle_inputs();
         for (auto &enemy : global.game.enemies) {
