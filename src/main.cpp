@@ -16,6 +16,7 @@
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <fstream>
@@ -40,9 +41,22 @@ struct Position {
         y += v.y;
         return *this;
     }
+    Position &operator-=(const glm::vec2 &v) {
+        x -= v.x;
+        y -= v.y;
+        return *this;
+    }
 
     glm::vec2 to_glm() const { return glm::vec2(x, y); }
 };
+
+inline std::ostream &operator<<(std::ostream &os, const Position &p) {
+    return os
+           << "Position("
+           << p.x << ", "
+           << p.y
+           << ")";
+}
 
 inline float distance(const Position &a, const Position &b) {
     return glm::distance(a.to_glm(), b.to_glm());
@@ -54,6 +68,9 @@ struct Color {
     Color() = default;
     Color(float r_, float g_, float b_) : r(r_), g(g_), b(b_) {}
     Color(const glm::vec3 &v) : r(v.r), g(v.g), b(v.b) {}
+    static Color from_u8(uint8_t r, uint8_t g, uint8_t b) {
+        return Color(r / 255.0f, g / 255.0f, b / 255.0f);
+    }
     operator glm::vec3() const { return {r, g, b}; }
 
     Color operator*(float f) const { return {r * f, g * f, b * f}; }
@@ -68,6 +85,15 @@ struct Color {
             a.b * (1.0f - t) + b.b * t};
     }
 };
+
+inline std::ostream &operator<<(std::ostream &os, const Color &c) {
+    return os
+           << "Color("
+           << c.r << ", "
+           << c.g << ", "
+           << c.b
+           << ")";
+}
 
 using gl_VAO = GLuint;
 using gl_VBO = GLuint;
@@ -110,8 +136,8 @@ struct Constants {
     static constexpr int window_height = 720;
     static constexpr float aspect_ratio = static_cast<float>(window_width) / window_height;
 
-    static constexpr float path_marker_width = 0.05f;
-    static constexpr float path_marker_height = 0.05f;
+    static constexpr float path_marker_width = 0.025f;
+    static constexpr float path_marker_height = 0.025f;
 
     static constexpr std::array<float, 12> square_vertices = {
         1.0f, -1.0f, 0.0f,
@@ -180,6 +206,12 @@ struct Box {
     auto get_center() const -> Position {
         return Position{position.x + width / 2.0f, position.y - height / 2.0f};
     }
+    auto is_point_inside(Position pos) const -> bool {
+        return pos.x >= position.x &&
+               pos.x <= position.x + width &&
+               pos.y >= position.y - height &&
+               pos.y <= position.y;
+    }
 };
 inline float distance(const Box &a, const Box &b) {
     return distance(a.get_center(), b.get_center());
@@ -241,6 +273,7 @@ auto collision_box_box(const Box b1, const Box b2) -> bool {
 }
 
 struct Enemy {
+    int id;
     bool is_active;
     int hp;
     int hp_max;
@@ -279,7 +312,7 @@ struct ShaderProgram {
 };
 
 struct s_Color {
-    Color background{0.2f, 0.2f, 0.31f};
+    Color background = Color::from_u8(15, 15, 21);
     Color path_marker{1.0f, 0.0f, 1.0f};
     Color enemy{1.0f, 0.0f, 0.0f};
     Color tower_fire{0.9f, 0.1f, 0.3f};
@@ -299,11 +332,12 @@ inline void from_json(const json &j, TowerType &t) { t = static_cast<TowerType>(
 
 struct GameState {
     int score = 0;
+    int life = 10;
 
     std::vector<Enemy> enemies = {
-        Enemy{true, 100, 100, Box{window_normalized_to_ndc(Position{0.441f, 0.467f}), 0.05f, 0.05f}},
-        Enemy{true, 250, 500, Box{window_normalized_to_ndc(Position{0.271f, 0.768f}), 0.05f, 0.05f}},
-        Enemy{true, 300, 300, Box{window_normalized_to_ndc(Position{0.668f, 0.160f}), 0.05f, 0.05f}}};
+        Enemy{0, true, 100, 100, Box{window_normalized_to_ndc(Position{0.441f, 0.467f}), 0.05f, 0.05f}},
+        Enemy{1, true, 250, 500, Box{window_normalized_to_ndc(Position{0.271f, 0.768f}), 0.05f, 0.05f}},
+        Enemy{2, true, 300, 300, Box{window_normalized_to_ndc(Position{0.668f, 0.160f}), 0.05f, 0.05f}}};
 
     std::vector<Tower> towers = {
         Tower{true, TowerType::Fire, Box{window_normalized_to_ndc(Position{0.146f, 0.516f}), 0.1f, 0.1f}, 0},
@@ -355,9 +389,8 @@ struct Global {
     std::array<float, Constants::max_tower_level> tower_table_range = {0.25f, 0.3f, 0.35f, 0.4f, 0.45f};
     std::array<float, Constants::max_tower_level> damage_table = {10.0f, 20.0f, 30.0f, 40.0f, 50.0f};
 
-    std::array<Box, 20>
+    std::array<Box, 15>
         path_markers = {
-            Box{window_normalized_to_ndc(Position{0.082f, 0.605f}), Constants::path_marker_width, Constants::path_marker_height},
             Box{window_normalized_to_ndc(Position{0.131f, 0.931f}), Constants::path_marker_width, Constants::path_marker_height},
             Box{window_normalized_to_ndc(Position{0.133f, 0.729f}), Constants::path_marker_width, Constants::path_marker_height},
             Box{window_normalized_to_ndc(Position{0.173f, 0.573f}), Constants::path_marker_width, Constants::path_marker_height},
@@ -372,11 +405,7 @@ struct Global {
             Box{window_normalized_to_ndc(Position{0.710f, 0.558f}), Constants::path_marker_width, Constants::path_marker_height},
             Box{window_normalized_to_ndc(Position{0.716f, 0.368f}), Constants::path_marker_width, Constants::path_marker_height},
             Box{window_normalized_to_ndc(Position{0.774f, 0.226f}), Constants::path_marker_width, Constants::path_marker_height},
-            Box{window_normalized_to_ndc(Position{0.939f, 0.166f}), Constants::path_marker_width, Constants::path_marker_height},
-            Box{window_normalized_to_ndc(Position{0.780f, 0.058f}), Constants::path_marker_width, Constants::path_marker_height},
-            Box{window_normalized_to_ndc(Position{0.494f, 0.035f}), Constants::path_marker_width, Constants::path_marker_height},
-            Box{window_normalized_to_ndc(Position{0.202f, 0.090f}), Constants::path_marker_width, Constants::path_marker_height},
-            Box{window_normalized_to_ndc(Position{0.088f, 0.360f}), Constants::path_marker_width, Constants::path_marker_height}};
+            Box{window_normalized_to_ndc(Position{0.939f, 0.166f}), Constants::path_marker_width, Constants::path_marker_height}};
 
     int gl_success;
     char gl_error_buffer[512];
@@ -385,18 +414,94 @@ struct Global {
 };
 Global global;
 
+auto spawn_tower_at_position(const Position &position) -> void {
+    auto box = Box{position, 0.1f, 0.1f};
+    global.game.towers.push_back(Tower{true, TowerType::Fire, box, 0});
+}
+
+auto emplace_enemy(Enemy enemy) -> void {
+    enemy.id = global.game.enemies.size();
+    global.game.enemies.push_back(enemy);
+}
+
+auto spawn_enemy_at_position(const Position &position) -> void {
+    auto box = Box{position, 0.05f, 0.05f};
+    emplace_enemy(Enemy{0, true, 100, 100, box});
+}
+
+auto advance_pathfinding_target(Enemy *enemy) -> void {
+    if (enemy->pathfinding_target == -1) panic("Trying to advance not initialised pathfinding target");
+    enemy->pathfinding_target += 1;
+    bool has_reached_end = (enemy->pathfinding_target == global.path_markers.size());
+    if (has_reached_end) {
+        global.game.life -= 1;
+        enemy->box.position = global.path_markers[0].position;
+        enemy->pathfinding_target = 0;
+        enemy->hp = enemy->hp_max;
+    }
+}
 auto on_tick_enemy(Enemy *enemy) -> void {
     if (!enemy->is_active) return;
-    auto &target = global.path_markers[enemy->pathfinding_target];
-    float dist_to_target = distance(target.position, enemy->box.position);
-    if (dist_to_target < 0.01f) {
-        enemy->pathfinding_target = (enemy->pathfinding_target + 1) % global.path_markers.size();
+
+    bool no_target = enemy->pathfinding_target == -1;
+    if (no_target) {
+        float min_dist = 100000.0f;
+        int min_idx = -1;
+        if (enemy->pathfinding_target == -1) {
+            for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
+                // make this center to center distance instead
+                auto &marker = global.path_markers[marker_idx];
+                float dist = distance(enemy->box, marker);
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    min_idx = marker_idx;
+                }
+            }
+        }
+        enemy->pathfinding_target = min_idx;
     }
+    { // Movement
+        auto &target = global.path_markers[enemy->pathfinding_target];
+        float dist_to_target = distance(target.position, enemy->box.position);
+        if (dist_to_target < 0.01f) {
+            advance_pathfinding_target(enemy);
+        }
+        glm::vec2 dir = normalize((target.position - enemy->box.position).to_glm());
+        enemy->box.position += dir * 0.007f;
+    }
+    { // Combining enemies
 
-    glm::vec2 dir = normalize((target.position - enemy->box.position).to_glm());
+        for (auto &other : global.game.enemies) {
+            if (!other.is_active) continue;
+            if (enemy->id == other.id) continue;
+            if (collision_box_box(enemy->box, other.box)) {
+                { // height
+                    float big = std::max(enemy->box.height, other.box.height);
+                    float small = std::min(enemy->box.height, other.box.height);
+                    enemy->box.height = big + small / 5.0f;
+                }
+                { // width
+                    float big = std::max(enemy->box.width, other.box.width);
+                    float small = std::min(enemy->box.width, other.box.width);
+                    enemy->box.width = big + small / 5.0f;
+                }
+                { // max HP
+                    int big = std::max(enemy->hp_max, other.hp_max);
+                    int small = std::min(enemy->hp_max, other.hp_max);
+                    enemy->hp_max = big + small / 5.0f;
+                }
+                { // current HP
+                    int big = std::max(enemy->hp, other.hp);
+                    int small = std::min(enemy->hp, other.hp);
+                    enemy->hp = big + small / 5.0f;
+                    if (enemy->hp > enemy->hp_max)
+                        enemy->hp = enemy->hp_max;
+                }
 
-    // TODO: Might need to normalize for aspect ratio
-    enemy->box.position += dir * 0.007f;
+                other.is_active = false;
+            }
+        }
+    }
 
     if (enemy->is_active) {
         if (enemy->hp <= 0) enemy->death();
@@ -467,9 +572,11 @@ auto _main_imgui() -> void {
         ImGui::Text("Runtime Count: %lld", global.runtime.count());
         ImGui::Text("Delta Time (ms): %lld", global.delta_time.count());
         ImGui::Text("Score: %d", global.game.score);
+        ImGui::Text("Life: %d", global.game.life);
         ImGui::Text("Mouse Position: (%.3f, %.3f)", global.mouse_pos.x, global.mouse_pos.y);
         for (size_t enemy_idx = 0; enemy_idx < global.game.enemies.size(); ++enemy_idx) {
-            ImGui::Text("Enemy %zu target: %d", enemy_idx, global.game.enemies[enemy_idx].pathfinding_target);
+            auto enemy = global.game.enemies[enemy_idx];
+            ImGui::Text("Enemy %zu (%.3f, %.3f) target: %d", enemy_idx, enemy.box.position.x, enemy.box.position.y, enemy.pathfinding_target);
         }
         for (size_t tower_idx = 0; tower_idx < global.game.towers.size(); ++tower_idx) {
             auto &tower = global.game.towers[tower_idx];
@@ -501,17 +608,48 @@ auto _main_handle_inputs() -> void {
             case SDLK_ESCAPE:
                 global.running = false;
                 break;
+            case SDLK_s: {
+                std::cout << "Trying to save gamedata\n";
+                std::ofstream out("gamestate.json");
+                if (!out) panic("Failed to open gamestate.json for writing!");
+
+                json save_data;
+
+                save_data["towers"] = json::array();
+                for (const auto &tower : global.game.towers) {
+                    save_data["towers"].push_back(json(tower));
+                }
+
+                save_data["enemies"] = json::array();
+                for (const auto &enemy : global.game.enemies) {
+                    save_data["enemies"].push_back(json(enemy));
+                }
+
+                out << std::setw(2) << save_data << "\n";
+                break;
+            }
+            case SDLK_l:
+                break;
+            case SDLK_e:
+                Position mouse_pos_ndc = window_normalized_to_ndc(global.mouse_pos);
+                spawn_enemy_at_position(mouse_pos_ndc);
+                break;
             }
         }
 
         if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
-            std::cout << "Mouse Clicked at: (" << global.mouse_pos.x << ", " << global.mouse_pos.y << ")\n";
+            auto mouse_pos = Position{global.mouse_pos.x, global.mouse_pos.y};
+            std::cout << "Mouse Clicked at: " << mouse_pos << "\n";
+            spawn_tower_at_position(window_normalized_to_ndc(mouse_pos));
         }
         if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_RIGHT) {
-            std::cout << "Trying to save gamedata\n";
-            std::ofstream out("gamestate.json");
-            if (!out) panic("Failed to open gamestate.json for writing!");
-            out << std::setw(2) << json(global.game.towers[0]) << "\n";
+            Position mouse_pos_ndc = window_normalized_to_ndc(global.mouse_pos);
+            for (auto &tower : global.game.towers) {
+                if (tower.box.is_point_inside(mouse_pos_ndc)) {
+                    std::cout << "Disabling tower\n";
+                    tower.is_active = false;
+                }
+            }
         }
     }
 }
@@ -576,7 +714,7 @@ auto _main_render() -> void {
                 if (!enemy.is_active) continue;
 
                 float health_pct = static_cast<float>(enemy.hp) / enemy.hp_max;
-                _gl_set_color_ubo(shader, Color::mix(global.color.enemy, Constants::Color::black, health_pct));
+                _gl_set_color_ubo(shader, Color::mix(Constants::Color::black, global.color.enemy, health_pct));
                 _gl_set_box_ubo(shader, enemy.box);
 
                 glDrawElements(GL_TRIANGLES, Constants::square_indices.size(), GL_UNSIGNED_INT, 0);
@@ -897,24 +1035,6 @@ auto main(int argc, char **argv) -> int {
     create_vao_square();
     create_vao_triangle();
     creat_vao_triangle();
-
-    for (size_t enemy_idx = 0; enemy_idx < global.game.enemies.size(); ++enemy_idx) {
-        Enemy &enemy = global.game.enemies[enemy_idx];
-        float min_dist = 100000.0f;
-        int min_idx = -1;
-        if (enemy.pathfinding_target == -1) {
-            for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
-                // make this center to center distance instead
-                auto &marker = global.path_markers[marker_idx];
-                float dist = distance(enemy.box, marker);
-                if (dist < min_dist) {
-                    min_dist = dist;
-                    min_idx = marker_idx;
-                }
-            }
-        }
-        enemy.pathfinding_target = min_idx;
-    }
 
     global.run_start_time = std::chrono::system_clock::now();
     global.running = true;
