@@ -302,7 +302,7 @@ enum class TowerType {
 struct Tower;
 
 struct Projectile {
-    Tower *parent;
+    int tower_idx;
     bool is_active = false;
     std::chrono::steady_clock::time_point spawn_time;
     Box box;
@@ -313,12 +313,14 @@ struct EnemyInRange {
     float distance;
 };
 struct Tower {
+    int id;
     bool is_active;
     TowerType type;
     Box box;
     int level;
     std::vector<EnemyInRange> enemies_in_range;
     std::array<Projectile, 6> projectiles;
+    std::chrono::steady_clock::time_point time_of_last_shot;
 
     auto find_closest_enemy() const -> std::optional<int> {
         if (enemies_in_range.empty()) return std::nullopt;
@@ -329,11 +331,6 @@ struct Tower {
             });
 
         return min_it->id;
-    }
-    auto init_projectiles() -> void {
-        for (auto &p : projectiles) {
-            p.parent = this;
-        }
     }
 };
 
@@ -364,12 +361,19 @@ struct GameState {
     std::vector<Enemy> enemies = {
         Enemy{0, true, 100, 100, Box{window_normalized_to_ndc(Position{0.441f, 0.467f}), 0.05f, 0.05f}},
         Enemy{1, true, 250, 500, Box{window_normalized_to_ndc(Position{0.271f, 0.768f}), 0.05f, 0.05f}},
-        Enemy{2, true, 300, 300, Box{window_normalized_to_ndc(Position{0.668f, 0.160f}), 0.05f, 0.05f}}};
+        Enemy{2, true, 300, 300, Box{window_normalized_to_ndc(Position{0.668f, 0.160f}), 0.05f, 0.05f}},
+        Enemy{3, true, 300, 300, Box{window_normalized_to_ndc(Position{0.339844f, 0.452778f}), 0.05f, 0.05f}},
+        Enemy{4, true, 300, 300, Box{window_normalized_to_ndc(Position{0.386719f, 0.255556f}), 0.05f, 0.05f}},
+        Enemy{5, true, 300, 300, Box{window_normalized_to_ndc(Position{0.514063f, 0.126389f}), 0.05f, 0.05f}},
+        Enemy{6, true, 300, 300, Box{window_normalized_to_ndc(Position{0.760156f, 0.658333f}), 0.05f, 0.05f}},
+        Enemy{7, true, 300, 300, Box{window_normalized_to_ndc(Position{0.721875f, 0.851389f}), 0.05f, 0.05f}},
+        Enemy{8, true, 300, 300, Box{window_normalized_to_ndc(Position{0.49375f, 0.866667f}), 0.05f, 0.05f}},
+        Enemy{9, true, 300, 300, Box{window_normalized_to_ndc(Position{0.464844f, 0.690278f}), 0.05f, 0.05f}}};
 
     std::vector<Tower> towers = {
-        Tower{true, TowerType::Fire, Box{window_normalized_to_ndc(Position{0.146f, 0.516f}), 0.1f, 0.1f}, 0},
-        Tower{true, TowerType::Ice, Box{window_normalized_to_ndc(Position{0.897f, 0.465f}), 0.1f, 0.1f}, 2},
-        Tower{true, TowerType::Buff, Box{window_normalized_to_ndc(Position{0.55f, 0.400f}), 0.1f, 0.1f}, 4}};
+        Tower{0, true, TowerType::Fire, Box{window_normalized_to_ndc(Position{0.146f, 0.516f}), 0.1f, 0.1f}, 1},
+        Tower{1, true, TowerType::Ice, Box{window_normalized_to_ndc(Position{0.827f, 0.276f}), 0.1f, 0.1f}, 3},
+        Tower{2, true, TowerType::Buff, Box{window_normalized_to_ndc(Position{0.55f, 0.400f}), 0.1f, 0.1f}, 4}};
 
     /*
     auto GameState::serialise() -> void {
@@ -413,8 +417,10 @@ struct Global {
     std::chrono::duration<float> delta_time;
     std::chrono::duration<float> runtime;
 
-    std::array<float, Constants::max_tower_level> tower_table_range = {0.25f, 0.3f, 0.35f, 0.4f, 0.45f};
-    std::array<float, Constants::max_tower_level> damage_table = {10.0f, 20.0f, 30.0f, 40.0f, 50.0f};
+    // Index into those with the tower level
+    std::array<float, Constants::max_tower_level> table_tower_range = {0.25f, 0.3f, 0.35f, 0.4f, 0.45f};
+    std::array<float, Constants::max_tower_level> table_tower_damage = {5, 10, 20, 40, 50};
+    std::array<float, Constants::max_tower_level> table_tower_firing_delay = {1.0f, 0.9f, 0.8f, 0.7f, 0.5f};
 
     std::array<Box, 15>
         path_markers = {
@@ -441,15 +447,24 @@ struct Global {
 };
 Global global;
 
+auto tower_init_projectiles(Tower &tower) -> void {
+    tower.time_of_last_shot = global.frame_start_time;
+    for (auto &p : tower.projectiles) {
+        p.tower_idx = tower.id;
+    }
+}
 auto init_global() -> void {
     for (auto &tower : global.game.towers) {
-        tower.init_projectiles();
+        tower_init_projectiles(tower);
     }
 }
 
 auto spawn_tower_at_position(const Position &position) -> void {
     auto box = Box{position, 0.1f, 0.1f};
-    global.game.towers.push_back(Tower{true, TowerType::Fire, box, 0});
+    int tower_id = global.game.towers.size();
+    auto tower = Tower{tower_id, true, TowerType::Fire, box, 0};
+    tower_init_projectiles(tower);
+    global.game.towers.push_back(tower);
 }
 
 auto emplace_enemy(Enemy enemy) -> void {
@@ -462,74 +477,74 @@ auto spawn_enemy_at_position(const Position &position) -> void {
     emplace_enemy(Enemy{0, true, 100, 100, box});
 }
 
-auto advance_pathfinding_target(Enemy *enemy) -> void {
-    if (enemy->pathfinding_target == -1) panic("Trying to advance not initialised pathfinding target");
-    enemy->pathfinding_target += 1;
-    bool has_reached_end = (enemy->pathfinding_target == global.path_markers.size());
+auto advance_pathfinding_target(Enemy &enemy) -> void {
+    if (enemy.pathfinding_target == -1) panic("Trying to advance not initialised pathfinding target");
+    enemy.pathfinding_target += 1;
+    bool has_reached_end = (enemy.pathfinding_target == global.path_markers.size());
     if (has_reached_end) {
         global.game.life -= 1;
-        enemy->box.position = global.path_markers[0].position;
-        enemy->pathfinding_target = 0;
-        enemy->hp = enemy->hp_max;
+        enemy.box.position = global.path_markers[0].position;
+        enemy.pathfinding_target = 0;
+        enemy.hp = enemy.hp_max;
     }
 }
 
-auto on_tick_enemy(Enemy *enemy) -> void {
-    if (!enemy->is_active) return;
+auto on_tick_enemy(Enemy &enemy) -> void {
+    if (!enemy.is_active) return;
 
-    bool no_target = enemy->pathfinding_target == -1;
+    bool no_target = enemy.pathfinding_target == -1;
     if (no_target) {
         float min_dist = 100000.0f;
         int min_idx = -1;
-        if (enemy->pathfinding_target == -1) {
+        if (enemy.pathfinding_target == -1) {
             for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
                 // make this center to center distance instead
                 auto &marker = global.path_markers[marker_idx];
-                float dist = distance(enemy->box, marker);
+                float dist = distance(enemy.box, marker);
                 if (dist < min_dist) {
                     min_dist = dist;
                     min_idx = marker_idx;
                 }
             }
         }
-        enemy->pathfinding_target = min_idx;
+        enemy.pathfinding_target = min_idx;
     }
     { // Movement
-        auto &target = global.path_markers[enemy->pathfinding_target];
-        float dist_to_target = distance(target.position, enemy->box.position);
+        auto &target = global.path_markers[enemy.pathfinding_target];
+        float dist_to_target = distance(target.position, enemy.box.position);
         if (dist_to_target < 0.01f) {
             advance_pathfinding_target(enemy);
         }
-        vec2 dir = normalize((target.position - enemy->box.position).to_glm());
-        enemy->box.position += dir * 0.007f;
+        vec2 dir = normalize((target.position - enemy.box.position).to_glm());
+        enemy.box.position += dir * 0.001f;
     }
     { // Combining enemies
 
         for (auto &other : global.game.enemies) {
             if (!other.is_active) continue;
-            if (enemy->id == other.id) continue;
-            if (collision_box_box(enemy->box, other.box)) {
+            if (enemy.id == other.id) continue;
+            if (collision_box_box(enemy.box, other.box)) {
                 { // height
-                    float big = std::max(enemy->box.height, other.box.height);
-                    float small = std::min(enemy->box.height, other.box.height);
-                    enemy->box.height = big + small / 5.0f;
+                    float big = std::max(enemy.box.height, other.box.height);
+                    float small = std::min(enemy.box.height, other.box.height);
+                    enemy.box.height = big + small / 5.0f;
                 }
                 { // width
-                    float big = std::max(enemy->box.width, other.box.width);
-                    float small = std::min(enemy->box.width, other.box.width);
-                    enemy->box.width = big + small / 5.0f;
+                    float big = std::max(enemy.box.width, other.box.width);
+                    float small = std::min(enemy.box.width, other.box.width);
+                    enemy.box.width = big + small / 5.0f;
                 }
                 { // max HP
-                    int big = std::max(enemy->hp_max, other.hp_max);
-                    int small = std::min(enemy->hp_max, other.hp_max);
-                    enemy->hp_max = big + small / 5.0f;
+                    int big = std::max(enemy.hp_max, other.hp_max);
+                    int small = std::min(enemy.hp_max, other.hp_max);
+                    enemy.hp_max = big + small / 5.0f;
                 }
                 { // current HP
-                    int big = std::max(enemy->hp, other.hp);
-                    int small = std::min(enemy->hp, other.hp);
-                    enemy->hp = big + small / 5.0f;
-                    if (enemy->hp > enemy->hp_max)
-                        enemy->hp = enemy->hp_max;
+                    int big = std::max(enemy.hp, other.hp);
+                    int small = std::min(enemy.hp, other.hp);
+                    enemy.hp = big + small / 5.0f;
+                    if (enemy.hp > enemy.hp_max)
+                        enemy.hp = enemy.hp_max;
                 }
 
                 other.is_active = false;
@@ -537,8 +552,8 @@ auto on_tick_enemy(Enemy *enemy) -> void {
         }
     }
 
-    if (enemy->is_active) {
-        if (enemy->hp <= 0) enemy->death();
+    if (enemy.is_active) {
+        if (enemy.hp <= 0) enemy.death();
     }
 }
 
@@ -546,42 +561,64 @@ auto shoot_at(Tower &tower, Position pos) -> void {
     vec2 dir = pos - tower.box.get_center();
     for (auto &proj : tower.projectiles) {
         if (!proj.is_active) {
-            proj.box.position = tower.box.get_center();
-            proj.dir = dir;
+            proj.box = Box{tower.box.get_center(), 0.02f, 0.02f};
+            proj.dir = glm::normalize(dir);
             proj.is_active = true;
             proj.spawn_time = global.frame_start_time;
+
+            tower.time_of_last_shot = global.frame_start_time;
             return;
         }
     }
 }
 
-auto on_tick_projectile(Projectile *proj) -> void {
-    if (!proj->is_active) return;
-    proj->box.position += 0.01f * proj->dir;
+auto proj_get_tower(const Projectile &proj) -> const Tower & {
+    return global.game.towers[proj.tower_idx];
+}
+
+auto on_tick_projectile(Projectile &proj) -> void {
+    if (!proj.is_active) return;
+
+    auto duration = std::chrono::duration<float>(global.frame_start_time - proj.spawn_time);
+    if (duration.count() >= 0.2f) {
+        proj.is_active = false;
+        return;
+    }
+    proj.box.position += 0.05f * proj.dir;
     for (auto &enemy : global.game.enemies) {
-        if (collision_box_box(proj->box, enemy.box)) {
-            enemy.take_damage(global.damage_table[proj->parent->level]);
-            proj->is_active = false;
+        if (collision_box_box(proj.box, enemy.box)) {
+            const Tower &tower = proj_get_tower(proj);
+            enemy.take_damage(global.table_tower_damage[tower.level]);
+            proj.is_active = false;
             break;
         }
     }
 }
 
-auto on_tick_tower(Tower *tower) -> void {
-    if (!tower->is_active) return;
-    tower->enemies_in_range.clear();
+auto on_tick_tower(Tower &tower) -> void {
+    if (!tower.is_active) return;
+    tower.enemies_in_range.clear();
 
     for (size_t enemy_idx = 0; enemy_idx < global.game.enemies.size(); ++enemy_idx) {
         auto &enemy = global.game.enemies[enemy_idx];
-        float dist = distance(tower->box, enemy.box);
-        if (dist < global.tower_table_range[tower->level]) {
-            tower->enemies_in_range.push_back(EnemyInRange{
+        if (!enemy.is_active) continue;
+        float dist = distance(tower.box, enemy.box);
+        if (dist < global.table_tower_range[tower.level]) {
+            tower.enemies_in_range.push_back(EnemyInRange{
                 static_cast<int>(enemy_idx), dist});
         }
     }
-    if (auto closest = tower->find_closest_enemy()) {
-        Enemy enemy = global.game.enemies[*closest];
-        shoot_at(*tower, enemy.box.get_center());
+
+    auto tower_firing_delay = std::chrono::duration<float>(global.table_tower_firing_delay[tower.level]);
+    bool ready_to_shoot = (global.frame_start_time - tower.time_of_last_shot) > tower_firing_delay;
+    if (ready_to_shoot) {
+        if (auto closest = tower.find_closest_enemy()) {
+            Enemy enemy = global.game.enemies[*closest];
+            shoot_at(tower, enemy.box.get_center());
+        }
+    }
+    for (auto &proj : tower.projectiles) {
+        on_tick_projectile(proj);
     }
 }
 
@@ -692,14 +729,25 @@ auto _main_handle_inputs() -> void {
     }
 }
 
-auto _gl_set_box_ubo(ShaderProgram sp, const Box box) -> void {
+namespace gl {
+auto set_box_ubo(ShaderProgram sp, const Box box) -> void {
     glUniform2f(sp.ubos["u_Pos"], box.position.x, box.position.y);
     glUniform1f(sp.ubos["u_Width"], box.width);
-    glUniform1f(sp.ubos["u_Height"], box.width);
+    glUniform1f(sp.ubos["u_Height"], box.height);
 }
-auto _gl_set_color_ubo(ShaderProgram sp, const Color color) -> void {
+auto set_color_ubo(ShaderProgram sp, const Color color) -> void {
     glUniform3f(sp.ubos["u_Color"], color.r, color.g, color.b);
 }
+auto draw_square() -> void {
+    glDrawElements(GL_TRIANGLES, Constants::square_indices.size(), GL_UNSIGNED_INT, 0);
+}
+auto draw_triangle() -> void {
+    glDrawElements(GL_TRIANGLES, Constants::triangle_indices.size(), GL_UNSIGNED_INT, 0);
+}
+auto draw_circle() -> void {
+    glDrawElements(GL_TRIANGLES, Constants::circle_indices.size(), GL_UNSIGNED_INT, 0);
+}
+} // namespace gl
 
 auto _main_render() -> void {
     glViewport(0, 0, (int)global.imgui_io.DisplaySize.x, (int)global.imgui_io.DisplaySize.y);
@@ -720,31 +768,31 @@ auto _main_render() -> void {
 
                 switch (tower.type) {
                 case TowerType::Fire:
-                    _gl_set_color_ubo(global.shader_program_single_color, global.color.tower_fire);
+                    gl::set_color_ubo(global.shader_program_single_color, global.color.tower_fire);
                     break;
                 case TowerType::Ice:
-                    _gl_set_color_ubo(global.shader_program_single_color, global.color.tower_ice);
+                    gl::set_color_ubo(global.shader_program_single_color, global.color.tower_ice);
                     break;
                 case TowerType::Buff:
-                    _gl_set_color_ubo(global.shader_program_single_color, global.color.tower_buff);
+                    gl::set_color_ubo(global.shader_program_single_color, global.color.tower_buff);
                     break;
                 default:
                     panic("Unknown Tower Type!");
                     break;
                 }
-                _gl_set_box_ubo(shader, tower.box);
+                gl::set_box_ubo(shader, tower.box);
 
-                glDrawElements(GL_TRIANGLES, Constants::triangle_indices.size(), GL_UNSIGNED_INT, 0);
+                gl::draw_triangle();
             }
             glBindVertexArray(global.vao_NONE);
         } // Triangle VAO
 
         { // Square VAO
             glBindVertexArray(global.vao_square);
-            _gl_set_color_ubo(shader, global.color.path_marker);
+            gl::set_color_ubo(shader, global.color.path_marker);
             for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
-                _gl_set_box_ubo(shader, global.path_markers[marker_idx]);
-                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+                gl::set_box_ubo(shader, global.path_markers[marker_idx]);
+                gl::draw_square();
             }
 
             for (size_t enemy_idx = 0; enemy_idx < global.game.enemies.size(); ++enemy_idx) {
@@ -752,10 +800,19 @@ auto _main_render() -> void {
                 if (!enemy.is_active) continue;
 
                 float health_pct = static_cast<float>(enemy.hp) / enemy.hp_max;
-                _gl_set_color_ubo(shader, Color::mix(Constants::Color::black, global.color.enemy, health_pct));
-                _gl_set_box_ubo(shader, enemy.box);
+                gl::set_color_ubo(shader, Color::mix(Constants::Color::black, global.color.enemy, health_pct));
+                gl::set_box_ubo(shader, enemy.box);
+                gl::draw_square();
+            }
 
-                glDrawElements(GL_TRIANGLES, Constants::square_indices.size(), GL_UNSIGNED_INT, 0);
+            gl::set_color_ubo(shader, global.color.projectile);
+            for (auto &tower : global.game.towers) {
+                if (!tower.is_active) continue;
+                for (auto &proj : tower.projectiles) {
+                    if (!proj.is_active) continue;
+                    gl::set_box_ubo(shader, proj.box);
+                    gl::draw_square();
+                }
             }
             glBindVertexArray(global.vao_NONE);
         } // Square VAO
@@ -771,14 +828,14 @@ auto _main_render() -> void {
                 Tower &tower = global.game.towers[tower_idx];
                 if (!tower.is_active) continue;
 
-                _gl_set_color_ubo(shader, global.color.tower_radius);
+                gl::set_color_ubo(shader, global.color.tower_radius);
 
-                float tower_range = global.tower_table_range[tower.level];
+                float tower_range = global.table_tower_range[tower.level];
                 auto box_shifted = Box{tower.box.get_center(), tower_range, tower_range};
-                _gl_set_box_ubo(shader, box_shifted);
+                gl::set_box_ubo(shader, box_shifted);
                 glUniform1f(shader.ubos["u_Radius"], tower_range);
                 glUniform2f(shader.ubos["u_Pos"], tower.box.get_center().x, tower.box.get_center().y);
-                glDrawElements(GL_TRIANGLES, Constants::circle_indices.size(), GL_UNSIGNED_INT, 0);
+                gl::draw_circle();
             }
             glBindVertexArray(global.vao_NONE);
         } // Circle VAO
@@ -1074,12 +1131,12 @@ auto main(int argc, char **argv) -> int {
     create_vao_triangle();
     creat_vao_triangle();
 
-    init_global();
-
     global.running = true;
     global.run_start_time = std::chrono::steady_clock::now();
     // For initial delta time computation
     global.frame_start_time = global.run_start_time;
+
+    init_global();
     while (global.running) {
         auto now = std::chrono::steady_clock::now();
         global.delta_time = now - global.frame_start_time;
@@ -1088,10 +1145,10 @@ auto main(int argc, char **argv) -> int {
 
         _main_handle_inputs();
         for (auto &enemy : global.game.enemies) {
-            on_tick_enemy(&enemy);
+            on_tick_enemy(enemy);
         }
         for (auto &tower : global.game.towers) {
-            on_tick_tower(&tower);
+            on_tick_tower(tower);
         }
 
         _main_imgui();

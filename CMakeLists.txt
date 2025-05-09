@@ -71,7 +71,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(glm)
 
 # ---------------------------------------
-# Fetch SDL2 in place of GLFW
+# Fetch SDL2 
 FetchContent_Declare(
     sdl2
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
