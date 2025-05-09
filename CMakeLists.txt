@@ -28,13 +28,22 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(imgui)
 
 # ---------------------------------------
-# Fetch stb (unchanged)
+# Fetch stb
 FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
     GIT_TAG master
 )
 FetchContent_MakeAvailable(stb)
+
+# ---------------------------------------
+# Fetch nlohmann/json
+FetchContent_Declare(
+  nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG        v3.11.2       # pick the release you want
+)
+FetchContent_MakeAvailable(nlohmann_json)
 
 # ---------------------------------------
 # Fetch xtl & xtensor & glm (unchanged)
@@ -126,6 +135,7 @@ target_link_libraries(main PRIVATE
     xtl
     xtensor
     glm::glm
+    nlohmann_json::nlohmann_json
 )
 
 # === ImGui implementation (switch to SDL backend) ===

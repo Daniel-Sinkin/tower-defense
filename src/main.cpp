@@ -13,6 +13,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
+
 #include <chrono>
 #include <ctime>
 #include <fstream>
@@ -21,8 +24,51 @@
 #include <sstream>
 #include <unordered_map>
 
-using Color = glm::vec3;
-using Position = glm::vec2;
+struct Position {
+    float x;
+    float y;
+
+    Position() = default;
+    Position(float x_, float y_) : x(x_), y(y_) {}
+    Position(const glm::vec2 &v) : x(v.x), y(v.y) {}
+    operator glm::vec2() const { return {x, y}; }
+
+    Position operator+(const glm::vec2 &v) const { return Position{x + v.x, y + v.y}; }
+    Position operator-(const glm::vec2 &v) const { return Position{x - v.x, y - v.y}; }
+    Position &operator+=(const glm::vec2 &v) {
+        x += v.x;
+        y += v.y;
+        return *this;
+    }
+
+    glm::vec2 to_glm() const { return glm::vec2(x, y); }
+};
+
+inline float distance(const Position &a, const Position &b) {
+    return glm::distance(a.to_glm(), b.to_glm());
+}
+
+struct Color {
+    float r, g, b;
+
+    Color() = default;
+    Color(float r_, float g_, float b_) : r(r_), g(g_), b(b_) {}
+    Color(const glm::vec3 &v) : r(v.r), g(v.g), b(v.b) {}
+    operator glm::vec3() const { return {r, g, b}; }
+
+    Color operator*(float f) const { return {r * f, g * f, b * f}; }
+    Color operator+(const Color &c) const { return {r + c.r, g + c.g, b + c.b}; }
+    glm::vec3 to_glm() const { return {r, g, b}; }
+    float *data() { return &r; }
+
+    static Color mix(const Color &a, const Color &b, float t) {
+        return {
+            a.r * (1.0f - t) + b.r * t,
+            a.g * (1.0f - t) + b.g * t,
+            a.b * (1.0f - t) + b.b * t};
+    }
+};
+
 using gl_VAO = GLuint;
 using gl_VBO = GLuint;
 using gl_EBO = GLuint;
@@ -59,7 +105,7 @@ constexpr std::array<float, 51> make_circle_vertices() {
     return v;
 }
 struct Constants {
-    static constexpr std::string_view window_title = "Breakout";
+    static constexpr std::string_view window_title = "Tower Defense";
     static constexpr int window_width = 1280;
     static constexpr int window_height = 720;
     static constexpr float aspect_ratio = static_cast<float>(window_width) / window_height;
@@ -131,10 +177,13 @@ struct Box {
     Position position;
     float width;
     float height;
-    auto get_center() -> Position {
+    auto get_center() const -> Position {
         return Position{position.x + width / 2.0f, position.y - height / 2.0f};
     }
 };
+inline float distance(const Box &a, const Box &b) {
+    return distance(a.get_center(), b.get_center());
+}
 
 enum class CollisionDirection {
     None,
@@ -220,10 +269,6 @@ struct Tower {
     std::vector<int> enemies_in_range;
 };
 
-struct GameState {
-    int score = 0;
-};
-
 struct ShaderProgram {
     gl_ShaderProgram id;
     std::unordered_map<std::string, gl_UBO> ubos;
@@ -242,6 +287,44 @@ struct s_Color {
     Color tower_buff{0.3f, 1.0f, 0.4f};
     Color tower_radius{0.1f, 0.8f, 0.0f};
     Color projectile{1.0f, 1.0f, 1.0f};
+};
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Position, x, y)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Box, position, width, height)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Enemy, is_active, hp, hp_max, box, pathfinding_target)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Tower, is_active, type, box, level, enemies_in_range)
+// TowerType Serialisation
+inline void to_json(json &j, TowerType t) { j = static_cast<int>(t); }
+inline void from_json(const json &j, TowerType &t) { t = static_cast<TowerType>(j.get<int>()); }
+
+struct GameState {
+    int score = 0;
+
+    std::vector<Enemy> enemies = {
+        Enemy{true, 100, 100, Box{window_normalized_to_ndc(Position{0.441f, 0.467f}), 0.05f, 0.05f}},
+        Enemy{true, 250, 500, Box{window_normalized_to_ndc(Position{0.271f, 0.768f}), 0.05f, 0.05f}},
+        Enemy{true, 300, 300, Box{window_normalized_to_ndc(Position{0.668f, 0.160f}), 0.05f, 0.05f}}};
+
+    std::vector<Tower> towers = {
+        Tower{true, TowerType::Fire, Box{window_normalized_to_ndc(Position{0.146f, 0.516f}), 0.1f, 0.1f}, 0},
+        Tower{true, TowerType::Ice, Box{window_normalized_to_ndc(Position{0.897f, 0.465f}), 0.1f, 0.1f}, 2},
+        Tower{true, TowerType::Buff, Box{window_normalized_to_ndc(Position{0.55f, 0.400f}), 0.1f, 0.1f}, 4}};
+
+    /*
+    auto GameState::serialise() -> void {
+        std::ofstream out("gamestate.json");
+        if (!out) panic("Failed to open gamestate.json for writing");
+        out << std::setw(2) << json(*this) << "\n";
+    }
+
+    auto GameState::deserialise() -> void {
+        std::ifstream in("gamestate.json");
+        if (!in) panic("Failed to open gamestate.json for reading");
+        json j;
+        in >> j;
+        *this = j.get<GameState>();
+    }
+    */
 };
 
 struct Global {
@@ -295,16 +378,6 @@ struct Global {
             Box{window_normalized_to_ndc(Position{0.202f, 0.090f}), Constants::path_marker_width, Constants::path_marker_height},
             Box{window_normalized_to_ndc(Position{0.088f, 0.360f}), Constants::path_marker_width, Constants::path_marker_height}};
 
-    std::vector<Enemy> enemies = {
-        Enemy{true, 100, 100, Box{window_normalized_to_ndc(Position{0.441f, 0.467f}), 0.05f, 0.05f}},
-        Enemy{true, 250, 500, Box{window_normalized_to_ndc(Position{0.271f, 0.768f}), 0.05f, 0.05f}},
-        Enemy{true, 300, 300, Box{window_normalized_to_ndc(Position{0.668f, 0.160f}), 0.05f, 0.05f}}};
-
-    std::vector<Tower> towers = {
-        Tower{true, TowerType::Fire, Box{window_normalized_to_ndc(Position{0.146f, 0.516f}), 0.1f, 0.1f}, 0},
-        Tower{true, TowerType::Ice, Box{window_normalized_to_ndc(Position{0.897f, 0.465f}), 0.1f, 0.1f}, 2},
-        Tower{true, TowerType::Buff, Box{window_normalized_to_ndc(Position{0.55f, 0.400f}), 0.1f, 0.1f}, 4}};
-
     int gl_success;
     char gl_error_buffer[512];
 
@@ -315,12 +388,12 @@ Global global;
 auto on_tick_enemy(Enemy *enemy) -> void {
     if (!enemy->is_active) return;
     auto &target = global.path_markers[enemy->pathfinding_target];
-    float dist_to_target = glm::distance(target.position, enemy->box.position);
+    float dist_to_target = distance(target.position, enemy->box.position);
     if (dist_to_target < 0.01f) {
         enemy->pathfinding_target = (enemy->pathfinding_target + 1) % global.path_markers.size();
     }
 
-    glm::vec2 dir = normalize(target.position - enemy->box.position);
+    glm::vec2 dir = normalize((target.position - enemy->box.position).to_glm());
 
     // TODO: Might need to normalize for aspect ratio
     enemy->box.position += dir * 0.007f;
@@ -333,9 +406,9 @@ auto on_tick_enemy(Enemy *enemy) -> void {
 auto on_tick_tower(Tower *tower) -> void {
     if (!tower->is_active) return;
     tower->enemies_in_range.clear();
-    for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
-        auto &enemy = global.enemies[enemy_idx];
-        float dist = glm::distance(tower->box.get_center(), enemy.box.get_center());
+    for (size_t enemy_idx = 0; enemy_idx < global.game.enemies.size(); ++enemy_idx) {
+        auto &enemy = global.game.enemies[enemy_idx];
+        float dist = distance(tower->box, enemy.box);
         if (dist < global.tower_table_range[tower->level]) {
             tower->enemies_in_range.push_back(enemy_idx);
         }
@@ -387,7 +460,7 @@ auto _main_imgui() -> void {
     ImGui::NewFrame();
     { // Debug
         ImGui::Begin("Debug");
-        ImGui::ColorEdit3("Background", glm::value_ptr(global.color.background));
+        ImGui::ColorEdit3("Background", global.color.background.data());
         ImGui::Text("Frame Counter: %d", global.frame_counter);
         ImGui::Text("Run Start: %s", format_time(global.run_start_time));
         ImGui::Text("Runtime: %s", format_duration(global.runtime));
@@ -395,11 +468,11 @@ auto _main_imgui() -> void {
         ImGui::Text("Delta Time (ms): %lld", global.delta_time.count());
         ImGui::Text("Score: %d", global.game.score);
         ImGui::Text("Mouse Position: (%.3f, %.3f)", global.mouse_pos.x, global.mouse_pos.y);
-        for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
-            ImGui::Text("Enemy %zu target: %d", enemy_idx, global.enemies[enemy_idx].pathfinding_target);
+        for (size_t enemy_idx = 0; enemy_idx < global.game.enemies.size(); ++enemy_idx) {
+            ImGui::Text("Enemy %zu target: %d", enemy_idx, global.game.enemies[enemy_idx].pathfinding_target);
         }
-        for (size_t tower_idx = 0; tower_idx < global.towers.size(); ++tower_idx) {
-            auto &tower = global.towers[tower_idx];
+        for (size_t tower_idx = 0; tower_idx < global.game.towers.size(); ++tower_idx) {
+            auto &tower = global.game.towers[tower_idx];
             for (auto &enemy_idx : tower.enemies_in_range) {
                 ImGui::Text("Tower %zu -> Enemy %d", tower_idx, enemy_idx);
             }
@@ -434,6 +507,12 @@ auto _main_handle_inputs() -> void {
         if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
             std::cout << "Mouse Clicked at: (" << global.mouse_pos.x << ", " << global.mouse_pos.y << ")\n";
         }
+        if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_RIGHT) {
+            std::cout << "Trying to save gamedata\n";
+            std::ofstream out("gamestate.json");
+            if (!out) panic("Failed to open gamestate.json for writing!");
+            out << std::setw(2) << json(global.game.towers[0]) << "\n";
+        }
     }
 }
 
@@ -455,11 +534,12 @@ auto _main_render() -> void {
         ShaderProgram &shader = global.shader_program_single_color;
         shader.activate();
         glUniform1f(shader.ubos["u_Time"], static_cast<float>(global.runtime.count()));
+        // shader.set_ubo1f("u_Time", static_cast<float>(global.runtime.count()));
 
         { // Triangle VAO
             glBindVertexArray(global.vao_triangle);
-            for (size_t tower_idx = 0; tower_idx < global.towers.size(); ++tower_idx) {
-                Tower &tower = global.towers[tower_idx];
+            for (size_t tower_idx = 0; tower_idx < global.game.towers.size(); ++tower_idx) {
+                Tower &tower = global.game.towers[tower_idx];
                 if (!tower.is_active) continue;
 
                 switch (tower.type) {
@@ -491,12 +571,12 @@ auto _main_render() -> void {
                 glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
             }
 
-            for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
-                Enemy &enemy = global.enemies[enemy_idx];
+            for (size_t enemy_idx = 0; enemy_idx < global.game.enemies.size(); ++enemy_idx) {
+                Enemy &enemy = global.game.enemies[enemy_idx];
                 if (!enemy.is_active) continue;
 
                 float health_pct = static_cast<float>(enemy.hp) / enemy.hp_max;
-                _gl_set_color_ubo(shader, health_pct * global.color.enemy + (1 - health_pct) * Constants::Color::black);
+                _gl_set_color_ubo(shader, Color::mix(global.color.enemy, Constants::Color::black, health_pct));
                 _gl_set_box_ubo(shader, enemy.box);
 
                 glDrawElements(GL_TRIANGLES, Constants::square_indices.size(), GL_UNSIGNED_INT, 0);
@@ -511,8 +591,8 @@ auto _main_render() -> void {
 
         { // Circle VAO
             glBindVertexArray(global.vao_circle);
-            for (size_t tower_idx = 0; tower_idx < global.towers.size(); ++tower_idx) {
-                Tower &tower = global.towers[tower_idx];
+            for (size_t tower_idx = 0; tower_idx < global.game.towers.size(); ++tower_idx) {
+                Tower &tower = global.game.towers[tower_idx];
                 if (!tower.is_active) continue;
 
                 _gl_set_color_ubo(shader, global.color.tower_radius);
@@ -818,15 +898,15 @@ auto main(int argc, char **argv) -> int {
     create_vao_triangle();
     creat_vao_triangle();
 
-    for (size_t enemy_idx = 0; enemy_idx < global.enemies.size(); ++enemy_idx) {
-        Enemy &enemy = global.enemies[enemy_idx];
+    for (size_t enemy_idx = 0; enemy_idx < global.game.enemies.size(); ++enemy_idx) {
+        Enemy &enemy = global.game.enemies[enemy_idx];
         float min_dist = 100000.0f;
         int min_idx = -1;
         if (enemy.pathfinding_target == -1) {
             for (size_t marker_idx = 0; marker_idx < global.path_markers.size(); ++marker_idx) {
                 // make this center to center distance instead
                 auto &marker = global.path_markers[marker_idx];
-                float dist = glm::distance(enemy.box.get_center(), marker.get_center());
+                float dist = distance(enemy.box, marker);
                 if (dist < min_dist) {
                     min_dist = dist;
                     min_idx = marker_idx;
@@ -846,10 +926,10 @@ auto main(int argc, char **argv) -> int {
         global.runtime = std::chrono::duration_cast<std::chrono::milliseconds>(global.frame_start_time - global.run_start_time);
 
         _main_handle_inputs();
-        for (auto &enemy : global.enemies) {
+        for (auto &enemy : global.game.enemies) {
             on_tick_enemy(&enemy);
         }
-        for (auto &tower : global.towers) {
+        for (auto &tower : global.game.towers) {
             on_tick_tower(&tower);
         }
 
